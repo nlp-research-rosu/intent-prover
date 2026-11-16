@@ -6,5 +6,9 @@
     "name": "Intent Computing"
   },
   "homepage": "https://prover.intentcomputing.org/privacy",
+  "interface": {
+    "composerIcon": "./assets/logo.svg",
+    "logo": "./assets/logo.svg"
+  },
   "skills": "./skills/"
 }

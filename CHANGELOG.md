@@ -6,6 +6,16 @@ Maintainers: add a line under Unreleased in the same pull request as the change.
 
 ## [Unreleased]
 
+### Added
+
+- Antigravity support: install with `agy plugin install https://github.com/nlp-research-rosu/intent-prover` and use the `/intent:intent-prover` skill. Scans report the `antigravity` host.
+- Shared artwork for the Claude Code, Codex and Antigravity plugins.
+
+### Changed
+
+- Plugin and skill installation tracks main or staging instead of a fixed release tag or commit. Plugin versions and CLI binaries remain part of GitHub releases.
+- Requested Scan and Prove workflows check for CLI updates before use, without repeating sign-in or checking on every command or poll.
+
 ## [1.2.0] - 2026-11-12
 
 ### Changed

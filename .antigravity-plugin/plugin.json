@@ -1,0 +1,12 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "intent",
+  "displayName": "Intent Prover",
+  "version": "1.2.0",
+  "description": "Code analysis and verification for AI coding assistants.",
+  "logo": "assets/logo.svg",
+  "author": { "name": "Intent Computing" },
+  "homepage": "https://prover.intentcomputing.org/privacy",
+  "repository": "https://github.com/nlp-research-rosu/intent-prover",
+  "keywords": ["code-review", "intent", "formal-verification"]
+}

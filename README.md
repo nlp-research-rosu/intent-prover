@@ -1,6 +1,6 @@
 # Intent Prover
 
-The `intent` plugin for Claude Code and Codex provides two explicitly requested workflows:
+The `intent` plugin for Claude Code, Codex and Antigravity provides two explicitly requested workflows:
 
 - **Scan** (`/intent:scan`): analyze a file, a folder or the whole repository.
 - **Prove** (`/intent:prove`): formal proofs with K for properties a review cannot settle.
@@ -47,7 +47,7 @@ Restart Claude Code or run `/reload-plugins`. Use the Intent Prover skill's onbo
 | `/intent:prove [what to prove]` | Formal proof with K through the global CLI. |
 | `/intent:doctor` | Read connection/configuration diagnostics; does not log in, clear credentials or update the plugin. |
 
-On Codex, ask the agent to invoke the corresponding skill. Scan and diagnostics use `node <plugin>/bin/intent.js`; Prove and login use the global `intent-prover` CLI. Network access and plugin-data writes may need sandbox approval.
+On Codex, ask the agent to invoke the corresponding skill. On Antigravity, the skill is `/intent:intent-prover`. Scan and diagnostics use `node <plugin>/bin/intent.js`; Prove and login use the global `intent-prover` CLI. Network access and plugin-data writes may need sandbox approval.
 
 ## Signing in
 
@@ -90,9 +90,13 @@ Reload or restart the host after updating. The plugin has no hook entrypoint or 
 
 Claude Code updates a plugin only when its version changes. Third-party marketplace auto-update is optional; enable it under `/plugin` → Marketplaces → intentcomputing. A running session needs `/reload-plugins` or a restart to use a new version.
 
-The shared marketplace pins the plugin source to a published tag and exact commit for both Claude Code and Codex. Merging code into a branch does not advertise it as a plugin update. Fresh installs and host updates use the release named by the marketplace, not the checkout's development files.
+The shared marketplace loads plugin files from `main` for both Claude Code and Codex. Main is the current published plugin and skill source; GitHub releases provide versioned CLI binaries. Native hosts still use plugin manifest versions to detect updates.
 
-Maintainers: use the release workflow to choose the source branch, channel and exact version (for example `1.3.0` or `1.3.0-staging.1`). Versions are entered manually, not automatically incremented. The workflow prepares the matching plugin/CLI package, builds and uploads all CLI assets, then publishes the release before advancing its catalog. Production releases run from `main`; staging releases update only their separate catalog, not the source branch or production installer/catalog. Concurrent catalog changes prevent a non-fast-forward push. Every user-visible PR needs an Unreleased entry in [CHANGELOG.md](CHANGELOG.md).
+For skill-only installs, use `npx skills add nlp-research-rosu/intent-prover#main --skill '*' --agent <agent> --global`. Run `npx skills update --global` to refresh installed skills. At the start of requested Scan or Prove work, the skill checks for a newer released CLI and updates it if needed, preserving configuration and sign-in. Ordinary messages and diagnostics do not install updates.
+
+For staging testing, use the same skill instructions from `staging` (`#staging` with npx). The staging marketplace tracks that branch with the source plugin name `intent`; its marketplace name remains `intentcomputing-staging`.
+
+Maintainers: use the release workflow to choose the source branch, channel and exact version (for example `1.3.0` or `1.3.0-staging.1`). Versions are entered manually, not automatically incremented. The workflow prepares the matching plugin/CLI package, builds and uploads all CLI assets, then publishes the release before advancing its catalog's version. Catalog sources remain on `main` or `staging`, without tag or commit pins. Production releases run from `main`; staging releases update only their separate catalog, not the source branch or production installer/catalog. Concurrent catalog changes prevent a non-fast-forward push. Every user-visible PR needs an Unreleased entry in [CHANGELOG.md](CHANGELOG.md).
 
 ## Install (Codex CLI 0.147 or newer)
 
@@ -102,6 +106,14 @@ codex plugin add intent@intentcomputing
 ```
 
 Restart Codex. The desktop app and VS Code extension use the same installed plugins. This plugin has no hooks to approve. Use the Intent Prover skill's onboarding guide and explicit `intent-prover login` when setup is needed.
+
+## Install (Antigravity)
+
+```bash
+agy plugin install https://github.com/nlp-research-rosu/intent-prover
+```
+
+Antigravity installs from the repository, not the shared marketplace, and reads `.antigravity-plugin/plugin.json`. The App, CLI and IDE share installed plugins. Antigravity has no plugin commands: use `/intent:intent-prover` or ask for a Scan or proof. Its terminal sandbox has no network access by default, so approve Scan and sign-in commands to run outside it. Local Scan state is kept in `~/.gemini/config/plugin-data/intent`.
 
 ## Scan
 
@@ -154,7 +166,8 @@ findings into formal proof or add assurance to a proof's recorded claims.
 ## Development
 
 - Zero runtime dependencies; plain ESM JavaScript, Node 18+.
-- `npm test` runs eight core Scan and upload-safety checks. The three `cli/tests/check-cli-*.py` scripts run eight checks against the built CLI for run/validate/prove, failure results, retry identity, attempt limits, input boundaries, offline HTML, login and Ctrl-C. `npm run test:integration` checks that loading each real Claude/Codex plugin does not automatically submit code, using local mock APIs without paid inference. These checks do not replace a real Scan/Prove smoke check before release.
+- `npm test` checks core Scan behavior, repository-root evidence, upload safety and corrupt-report retention. The three `cli/tests/check-cli-*.py` scripts check the built CLI for run/validate/prove, failure results, retry identity, each operation's attempt limit, input boundaries, repository-root evidence, offline HTML, login and Ctrl-C. `npm run test:integration` checks that loading each real Claude/Codex plugin does not automatically submit code, using local mock APIs without paid inference. These checks do not replace a real Scan/Prove smoke check before release.
+- Ordinary CI runs the core checks on Linux with Node 22, plus native CLI checks. Relevant plugin changes also run both host checks on Linux. Release/manual host checks use Linux too; native release binaries still build for all six platform/architecture targets.
 - `lib/snapshot.js` builds scoped repository snapshots; `lib/scan.js` submits, waits for and collects Scans. No host session capture or worker spawning remains.
 - Backend contract: the Intent Prover service API (`nlp-research-rosu/prover`); `test/helpers/fake-prover.js` provides a controlled service for checks.
 - CLI: `cli/` (Rust). CI runs formatting, clippy, build and existing tests.

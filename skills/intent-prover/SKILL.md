@@ -25,6 +25,10 @@ install updates, submit jobs or deliver old results on ordinary messages.
 
 ## Commands
 
+At the start of each requested Scan or Prove workflow, follow the
+[CLI update check](references/onboarding.md#check-cli-updates). Check once per
+workflow, not before every command or poll. Reuse saved sign-in.
+
 Claude Code: `/intent:scan [file or folder] [fast|balanced|full]`, `/intent:scan collect [task-id]`, `/intent:prove`, `/intent:doctor`.
 
 For Scan and diagnostics, run:
@@ -34,6 +38,9 @@ For Scan and diagnostics, run:
 Codex has no plugin slash commands. Use the path relative to this skill:
 
     node <folder of this SKILL.md>/../../bin/intent.js <subcommand> --host codex
+
+Antigravity has no plugin commands either; this skill is
+`/intent:intent-prover`. Use the same relative path with `--host antigravity`.
 
 These commands may need permission for network access and writing plugin data
 outside the sandbox. Prove uses the global `intent-prover` CLI on `PATH`, not
