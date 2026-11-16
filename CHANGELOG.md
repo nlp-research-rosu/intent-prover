@@ -6,6 +6,8 @@ Maintainers: add a line under Unreleased in the same pull request as the change.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-16
+
 ### Added
 
 - Antigravity support: install with `agy plugin install https://github.com/nlp-research-rosu/intent-prover` and use the `/intent:intent-prover` skill. Scans report the `antigravity` host.
