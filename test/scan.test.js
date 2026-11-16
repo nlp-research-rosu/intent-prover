@@ -43,13 +43,14 @@ test("snapshot filters/redacts tracked and non-ignored untracked files, preservi
   write(ctx.repo, "binary.dat", Buffer.from([0, 1, 2]));
   write(ctx.repo, ".intent/NOTES.md", "- Intended behaviour.\n");
   write(ctx.repo, ".intent/prove/old/PROOF.md", "private evidence\n");
-  const result = await cli(["fast"], ctx);
+  const result = await cli(["fast", "--host", "antigravity"], ctx);
   assert.equal(result.code, 0, result.err);
   const [upload] = fp.scanUploads();
   assert.deepEqual(validateScan(upload, "ScanUpload"), []);
   assert.deepEqual(upload.files.map((file) => file.path), [".intent/NOTES.md", "README.md", "src/app.py", "src/secret.py"]);
   assert.ok(!JSON.stringify(upload.files).includes("abcdefghijklmnopqrstuvwxyz"));
   assert.equal(upload.depth, "fast");
+  assert.equal(upload.meta.host, "antigravity");
 });
 
 test("snapshot scope is literal, rejects outside paths and does not follow symlinks", { skip: SKIP_FILE_SYMLINKS }, async () => {
@@ -125,8 +126,14 @@ test("corrupt reports are rejected without replacing a saved report", async () =
 
 test("an interrupted Scan keeps its task record and collect resumes without another upload", async () => {
   const ctx = setup();
+  const pluginRoot = path.join(ctx.data, ".gemini", "config", "plugins", "intent");
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  delete ctx.env.CLAUDE_PLUGIN_DATA;
+  delete ctx.env.PLUGIN_DATA;
+  const args = ["--host", "antigravity", "--plugin-root", pluginRoot];
+  const records = path.join(ctx.data, ".gemini", "config", "plugin-data", "intent", "scans");
   fp.state.scan.statuses = ["running"];
-  const child = spawn(BIN, ["scan"], { cwd: ctx.repo, env: ctx.env });
+  const child = spawn(BIN, ["scan", ...args], { cwd: ctx.repo, env: ctx.env });
   let err = "";
   let id;
   child.stderr.on("data", (bytes) => {
@@ -138,9 +145,10 @@ test("an interrupted Scan keeps its task record and collect resumes without anot
   });
   await new Promise((resolve) => child.on("close", resolve));
   assert.ok(id, err);
-  assert.ok(fs.existsSync(path.join(ctx.data, "scans", `${id}.json`)));
+  assert.ok(fs.existsSync(path.join(records, `${id}.json`)));
+  assert.equal(read(path.join(records, `${id}.json`)).host, "antigravity");
   fp.state.scan.statuses = ["done"];
-  const recovered = await cli(["collect", id], ctx);
+  const recovered = await cli(["collect", id, ...args], ctx);
   assert.equal(recovered.code, 0, recovered.err);
   assert.match(recovered.out, /Saved report/);
   assert.equal(fp.scanUploads().length, 1);

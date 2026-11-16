@@ -45,12 +45,14 @@ pub(crate) enum Host {
     #[default]
     ClaudeCode,
     Codex,
+    Antigravity,
 }
 impl Host {
     fn as_str(self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -106,6 +108,20 @@ fn data_dir(args: &PluginArgs) -> Result<PathBuf> {
         .or_else(|| env::var_os("CLAUDE_PLUGIN_ROOT").map(PathBuf::from));
     if let Some(root) = root {
         let root = snapshot::canonical(&root)?;
+        // Antigravity installs to .gemini/config/plugins/<plugin>.
+        if let Some(plugins) = root.parent()
+            && plugins.file_name().is_some_and(|s| s == "plugins")
+            && let Some(config) = plugins.parent()
+            && config.file_name().is_some_and(|s| s == "config")
+            && config
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|s| s == ".gemini")
+        {
+            return Ok(config
+                .join("plugin-data")
+                .join(root.file_name().context("Plugin name")?));
+        }
         // Installed cache layout: plugins/cache/<marketplace>/<plugin>/<version>.
         if let Some(cache) = root.ancestors().nth(3)
             && cache.file_name().is_some_and(|s| s == "cache")
