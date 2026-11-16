@@ -1,9 +1,8 @@
-//! Structured project requirements stored beside their source files.
-use crate::{CommandResult, api, session, storage};
+use crate::{CommandResult, api, session};
 use anyhow::{Context, Result, ensure};
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     collections::BTreeSet,
     fs,
@@ -14,19 +13,19 @@ pub const BRIEF: &str = "# Project requirements\n\n## Purpose\n\n## Expected beh
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// List requirements from every scope, or one source file.
+    /// List validated requirements from every scope, or one source file.
     List {
         #[arg(long)]
         file: Option<String>,
     },
     /// Show a requirement by its stable ID.
     Show { id: String },
-    /// Add JSON containing a statement, targets and optional reason.
+    /// Add a requirement from JSON (statement, targets, optional reason); derive storage from targets.
     Add {
         #[arg(long)]
         input: PathBuf,
     },
-    /// Replace a requirement, retaining its ID and adjusting its source placement.
+    /// Replace a requirement's content, retaining its ID and relocating it if targets change.
     Update {
         id: String,
         #[arg(long)]
@@ -36,7 +35,7 @@ pub enum Command {
     Remove { id: String },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Target {
     pub path: String,
@@ -44,7 +43,7 @@ pub struct Target {
     pub symbol: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Content {
     pub statement: String,
@@ -53,7 +52,7 @@ pub struct Content {
     pub reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Requirement {
     pub id: String,
@@ -63,7 +62,7 @@ pub struct Requirement {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Document {
     pub schema_version: u32,
@@ -71,9 +70,9 @@ pub struct Document {
 }
 
 pub fn record_hash(record: &Requirement) -> Result<String> {
-    Ok(storage::hash(serde_json::to_vec(&serde_json::to_value(
-        record,
-    )?)?))
+    Ok(crate::storage::hash(serde_json::to_vec(
+        &serde_json::to_value(record)?,
+    )?))
 }
 
 pub fn relative_path(value: &str) -> Result<()> {
@@ -178,7 +177,8 @@ pub fn read_document(path: &Path, local: Option<&str>) -> Result<Document> {
         fs::metadata(path)?.len() <= 1024 * 1024,
         "Requirements file exceeds 1 MiB"
     );
-    let doc: Document = serde_json::from_slice(&fs::read(path)?)
+    let bytes = fs::read(path)?;
+    let doc: Document = serde_json::from_slice(&bytes)
         .with_context(|| format!("Invalid requirements: {}", path.display()))?;
     ensure!(
         doc.schema_version == 1,
@@ -187,7 +187,7 @@ pub fn read_document(path: &Path, local: Option<&str>) -> Result<Document> {
     let mut ids = BTreeSet::new();
     for record in &doc.requirements {
         ensure!(
-            storage::valid_id(&record.id),
+            crate::storage::valid_id(&record.id),
             "Invalid requirement ID; expected six lowercase letters/digits"
         );
         ensure!(ids.insert(&record.id), "Duplicate requirement ID");
@@ -200,7 +200,7 @@ pub fn read_document(path: &Path, local: Option<&str>) -> Result<Document> {
     Ok(doc)
 }
 
-fn document_value(doc: &Document) -> Result<Value> {
+fn document_value(doc: &Document) -> Result<serde_json::Value> {
     let value = serde_json::to_value(doc)?;
     ensure!(
         serde_json::to_vec_pretty(&value)?.len() <= 1024 * 1024,
@@ -209,12 +209,20 @@ fn document_value(doc: &Document) -> Result<Value> {
     Ok(value)
 }
 
+fn write_document(path: &Path, doc: &Document) -> Result<()> {
+    api::write_json(
+        path.parent().context("Requirements path has no parent")?,
+        "requirements.json",
+        &document_value(doc)?,
+    )
+}
+
 fn store_record(
     root: &Path,
     docs: &mut Vec<(PathBuf, Option<String>, Document)>,
     record: Requirement,
 ) -> Result<()> {
-    let indexes = storage::property_placement(root, &record.id, &record.targets)?;
+    let indexes = crate::storage::property_placement(root, &record.id, &record.targets)?;
     let local = source_scope(&record.targets).map(str::to_owned);
     let target = local.as_ref().map_or_else(
         || root.join(".intent/source/requirements.json"),
@@ -231,7 +239,7 @@ fn store_record(
         Some(index) => index,
         None => {
             docs.push((
-                target,
+                target.clone(),
                 local,
                 Document {
                     schema_version: 1,
@@ -243,16 +251,16 @@ fn store_record(
     };
     let doc = &mut docs[destination].2;
     doc.requirements.retain(|r| r.id != record.id);
-    let id = record.id.clone();
-    doc.requirements.push(record);
+    doc.requirements.push(record.clone());
     let previous = previous.filter(|index| *index != destination);
     if let Some(index) = previous {
-        docs[index].2.requirements.retain(|r| r.id != id);
+        let (_, _, doc) = &mut docs[index];
+        doc.requirements.retain(|r| r.id != record.id);
     }
     let mut writes = Vec::new();
     for index in std::iter::once(destination).chain(previous) {
         let (path, _, doc) = &docs[index];
-        storage::safe_parent(root, path)?;
+        crate::storage::safe_parent(root, path)?;
         writes.push((path, document_value(doc)?));
     }
     for (path, value) in writes {
@@ -261,13 +269,9 @@ fn store_record(
         api::write_json(parent, "requirements.json", &value)?;
     }
     for (source, index) in indexes {
-        storage::write_index(root, &source, &index)?;
+        crate::storage::write_index(root, &source, &index)?;
     }
     Ok(())
-}
-
-fn doc_id(doc: &Document, id: &str) -> bool {
-    doc.requirements.iter().any(|r| r.id == id)
 }
 
 fn collect(
@@ -299,7 +303,9 @@ fn collect(
                     read_document(&file, Some(&local))?,
                 ));
             }
-            if !file.exists() && !entry.path().join("index.json").exists() {
+            if !entry.path().join("requirements.json").exists()
+                && !entry.path().join("index.json").exists()
+            {
                 collect(root, &entry.path(), out)?;
             }
         }
@@ -308,8 +314,8 @@ fn collect(
 }
 
 pub fn documents(root: &Path) -> Result<Vec<(PathBuf, Option<String>, Document)>> {
-    storage::intent(root)?;
-    storage::safe_parent(root, &root.join(".intent/source"))?;
+    crate::storage::intent(root, false)?;
+    crate::storage::safe_parent(root, &root.join(".intent/source"))?;
     let mut docs = Vec::new();
     let file = root.join(".intent/source/requirements.json");
     if file.exists() {
@@ -317,7 +323,7 @@ pub fn documents(root: &Path) -> Result<Vec<(PathBuf, Option<String>, Document)>
     }
     collect(root, &root.join(".intent/source"), &mut docs)?;
     for (file, _, _) in &docs {
-        storage::safe_parent(root, file)?;
+        crate::storage::safe_parent(root, file)?;
     }
     docs.sort_by(|a, b| a.0.cmp(&b.0));
     let mut ids = BTreeSet::new();
@@ -332,13 +338,48 @@ pub fn documents(root: &Path) -> Result<Vec<(PathBuf, Option<String>, Document)>
     Ok(docs)
 }
 
+pub fn brief(root: &Path) -> Result<Option<String>> {
+    let file = root.join(".intent/REQUIREMENTS.md");
+    if !file.exists() {
+        return Ok(None);
+    }
+    ensure!(
+        fs::symlink_metadata(&file)?.is_file(),
+        "Project brief must be a regular file"
+    );
+    ensure!(
+        fs::metadata(&file)?.len() <= 1024 * 1024,
+        "Project brief exceeds 1 MiB"
+    );
+    Ok(Some(fs::read_to_string(file)?))
+}
+
+pub(crate) fn context(root: &Path, paths: &[String]) -> Result<serde_json::Value> {
+    for path in paths {
+        relative_path(path)?;
+    }
+    let docs = documents(root)?;
+    let records: Vec<_> = docs
+        .iter()
+        .flat_map(|(_, _, doc)| &doc.requirements)
+        .filter(|record| {
+            paths.is_empty()
+                || record
+                    .targets
+                    .iter()
+                    .any(|target| paths.contains(&target.path))
+        })
+        .collect();
+    Ok(json!({"schema_version":1,"brief":brief(root)?,"requirements":records}))
+}
+
 pub fn dispatch(command: Command) -> CommandResult {
     let root = session::project_root(&std::env::current_dir()?)?;
     let _lock = if matches!(
         &command,
         Command::Add { .. } | Command::Update { .. } | Command::Remove { .. }
     ) {
-        Some(storage::lock(&root)?)
+        Some(crate::storage::lock(&root)?)
     } else {
         None
     };
@@ -370,37 +411,34 @@ pub fn dispatch(command: Command) -> CommandResult {
             let content: Content = serde_json::from_slice(&fs::read(input)?)?;
             validate(&content)?;
             validate_sources(&root, &content)?;
-            let record = Requirement::new(storage::new_id(&root)?, content);
+            let id = crate::storage::new_id(&root)?;
+            let record = Requirement::new(id, content);
             store_record(&root, &mut docs, record.clone())?;
             Ok((0, json!({"requirement":record})))
         }
         Command::Update { id, input } => {
             ensure!(
-                docs.iter().any(|(_, _, doc)| doc_id(doc, &id)),
+                docs.iter()
+                    .any(|(_, _, doc)| doc.requirements.iter().any(|r| r.id == id)),
                 "Unknown requirement ID"
             );
             let content: Content = serde_json::from_slice(&fs::read(input)?)?;
             validate(&content)?;
             validate_sources(&root, &content)?;
-            let record = Requirement::new(id, content);
+            let record = Requirement::new(id.clone(), content);
             store_record(&root, &mut docs, record.clone())?;
             Ok((0, json!({"requirement":record})))
         }
         Command::Remove { id } => {
-            let indexes = storage::property_removal(&root, &id)?;
+            let indexes = crate::storage::property_removal(&root, &id)?;
             let (path, _, doc) = docs
                 .iter_mut()
-                .find(|(_, _, doc)| doc_id(doc, &id))
+                .find(|(_, _, doc)| doc.requirements.iter().any(|r| r.id == id))
                 .context("Unknown requirement ID")?;
             doc.requirements.retain(|r| r.id != id);
-            storage::safe_parent(&root, path)?;
-            api::write_json(
-                path.parent().context("Requirements path has no parent")?,
-                "requirements.json",
-                &document_value(doc)?,
-            )?;
+            write_document(path, doc)?;
             for (source, index) in indexes {
-                storage::write_index(&root, &source, &index)?;
+                crate::storage::write_index(&root, &source, &index)?;
             }
             Ok((0, json!({"removed":id})))
         }

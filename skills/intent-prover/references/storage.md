@@ -6,7 +6,6 @@ with source. Ordinary chats and edits do not trigger remote work.
 ```text
 .intent/
   REQUIREMENTS.md
-  NOTES.md
   source/
     requirements.json
     <source-path>/
@@ -21,9 +20,9 @@ with source. Ordinary chats and edits do not trigger remote work.
   prove/sessions/<session-id>/
 ```
 
-`REQUIREMENTS.md` is editable project-wide human intent. `NOTES.md` remains the
-notes file included in explicitly requested Scan uploads when in scope. Scan
-does not upload structured requirements, current specs or operation logs.
+`REQUIREMENTS.md` is editable project-wide human intent. Scan consumes that brief,
+structured requirements applicable to the selected source files and their selected
+current specifications. Operation logs and authoring scratch are not uploaded.
 
 Use the local `requirements` CLI to add/update/remove structured requirements;
 its help owns syntax. Input JSON contains `statement`, nonempty `targets` with
@@ -43,8 +42,8 @@ Each associated submission allocates an independent spec bundle; `--spec-id`
 selects an existing bundle for update/sharing. Matching filenames do not choose
 a bundle. These local associations are not uploaded or claims of proof coverage.
 
-Logs retain the exact formal inputs, hashes, controls, outcomes and saved remote
-job links. Scan retains source hashes and reports, not a second source snapshot.
+Logs retain the exact submitted inputs, hashes, controls, outcomes and saved remote
+job links. Scan retains its compressed snapshot under `inputs/snapshot.json.gz`.
 Successful associated formal inputs can become current spec copies. A failed
 attempt can update `last_run`, but cannot replace current specs. Changed source,
 requirements, specs, frozen inputs or a newer selection prevent late promotion.

@@ -236,9 +236,10 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
         json!({
             "operation":"scan","api_url":api.config.server_url,"source":snap.source,
             "depth":depth.as_str(),"host":args.plugin.host.as_str(),
-            "snapshot_retained":false,"upload_sha256":support::hash(&snap.gz)
+            "requirement_binding":snap.source["requirement_binding"],
+            "upload_sha256":support::hash(&snap.gz)
         }),
-        &[],
+        &[("snapshot.json.gz".into(), snap.gz.clone())],
     )?;
     let operation_id = evidence
         .file_name()

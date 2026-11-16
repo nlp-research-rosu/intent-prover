@@ -1,4 +1,3 @@
-//! Repository-root current specifications and immutable operation evidence.
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -7,8 +6,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-
-const README: &str = "# .intent\n\nREQUIREMENTS.md holds project-wide human intent.\nsource/<source-path>/ holds requirements.json, index.json and current specs/<bundle-id>/ files.\nCross-file requirements live in source/requirements.json and have one owning per-source index.\nlogs/<operation-id>/ holds request.json, result.json, exact inputs/ and returned artifacts/.\nA saved operation is evidence of its recorded scope and outcome, not certification.\nprove/sessions/ contains local authoring scratch, not durable evidence.\nNOTES.md remains the project notes included by explicit Scan uploads.\n\nCommit requirements, current specifications and operation evidence with source.\nNever edit historical inputs/results or blanket-ignore .intent.\nThe local viewer excludes frozen input copies and authoring scratch.\nNo hooks, automatic reviews or background workers run.\n";
 
 pub fn hash(bytes: impl AsRef<[u8]>) -> String {
     ring::digest::digest(&ring::digest::SHA256, bytes.as_ref())
@@ -26,7 +23,7 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 pub fn safe_parent(root: &Path, file: &Path) -> Result<()> {
-    let base = intent(root)?;
+    let base = root.join(".intent");
     let relative = file.strip_prefix(&base)?;
     let mut current = base;
     for part in relative.components() {
@@ -42,7 +39,7 @@ pub fn safe_parent(root: &Path, file: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn intent(root: &Path) -> Result<PathBuf> {
+pub fn intent(root: &Path, create: bool) -> Result<PathBuf> {
     let dir = root.join(".intent");
     if let Ok(metadata) = fs::symlink_metadata(&dir) {
         ensure!(
@@ -50,45 +47,37 @@ pub fn intent(root: &Path) -> Result<PathBuf> {
             ".intent must be a real directory"
         );
     }
-    Ok(dir)
-}
-
-pub fn initialize(root: &Path) -> Result<PathBuf> {
-    let dir = intent(root)?;
-    fs::create_dir_all(&dir)?;
-    for (name, text) in [
-        ("REQUIREMENTS.md", crate::requirements::BRIEF),
-        ("README.md", README),
-        (".ignore", "*\n"),
-        (".gitignore", ".sent.log\n.storage.lock\n"),
-    ] {
-        let file = dir.join(name);
-        safe_parent(root, &file)?;
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&file)
-        {
-            Ok(mut output) => {
-                use std::io::Write;
-                output.write_all(text.as_bytes())?;
+    if create {
+        fs::create_dir_all(&dir)?;
+        for (name, text) in [
+            ("REQUIREMENTS.md", crate::requirements::BRIEF),
+            (".ignore", "*\n"),
+            ("README.md", include_str!("../../intent-storage.md")),
+            (".gitignore", ".sent.log\n.storage.lock\n"),
+        ] {
+            let path = dir.join(name);
+            if !path.exists() {
+                fs::write(path, text)?;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
         }
     }
     Ok(dir)
 }
 
+pub fn initialize(root: &Path) -> Result<PathBuf> {
+    intent(root, true)
+}
+
 pub fn lock(root: &Path) -> Result<fs::File> {
-    let file = initialize(root)?.join(".storage.lock");
-    safe_parent(root, &file)?;
+    let dir = intent(root, true)?;
+    let path = dir.join(".storage.lock");
+    safe_parent(root, &path)?;
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(file)?;
+        .open(path)?;
     file.lock()?;
     Ok(file)
 }
@@ -135,7 +124,7 @@ pub fn operation(root: &Path, mut request: Value, files: &[(String, Vec<u8>)]) -
     Ok(evidence)
 }
 
-/// Allocate a six-character identity while the caller holds the storage lock.
+/// Allocate a project-local identity; callers hold the storage lock until it is recorded.
 pub fn new_id(root: &Path) -> Result<String> {
     let mut used = BTreeSet::new();
     for (_, _, doc) in crate::requirements::documents(root)? {
@@ -149,8 +138,8 @@ pub fn new_id(root: &Path) -> Result<String> {
     }
     used.extend(specifications(root)?.into_keys());
     let logs = root.join(".intent/logs");
-    safe_parent(root, &logs)?;
     if logs.exists() {
+        safe_parent(root, &logs)?;
         for entry in fs::read_dir(logs)? {
             let entry = entry?;
             used.insert(entry.file_name().to_string_lossy().into_owned());
@@ -189,14 +178,15 @@ pub fn new_id(root: &Path) -> Result<String> {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+/// Current formal files and the last applicable operation for one property.
+#[derive(Clone, Default, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Selection {
     pub specs: Vec<String>,
     pub last_run: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Index {
     pub schema_version: u32,
@@ -245,11 +235,11 @@ pub fn read_index(root: &Path, source: &str) -> Result<Index> {
 
 pub fn write_index(root: &Path, source: &str, index: &Index) -> Result<()> {
     let dir = source_dir(root, source)?;
-    safe_parent(root, &dir.join("index.json"))?;
     fs::create_dir_all(&dir)?;
     crate::api::write_json(&dir, "index.json", &serde_json::to_value(index)?)
 }
 
+/// Specification references are relative to .intent, including for cross-file properties.
 pub fn spec_path(root: &Path, relative: &str) -> Result<PathBuf> {
     let (source, name) = relative
         .strip_prefix("source/")
@@ -268,10 +258,10 @@ pub fn spec_path(root: &Path, relative: &str) -> Result<PathBuf> {
 
 pub fn indexes(root: &Path) -> Result<Vec<(String, Index)>> {
     fn visit(root: &Path, dir: &Path, out: &mut Vec<(String, Index)>) -> Result<()> {
-        safe_parent(root, dir)?;
         if !dir.exists() {
             return Ok(());
         }
+        safe_parent(root, dir)?;
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -293,7 +283,7 @@ pub fn indexes(root: &Path) -> Result<Vec<(String, Index)>> {
     let mut out = Vec::new();
     visit(root, &root.join(".intent/source"), &mut out)?;
     out.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut owners = BTreeSet::new();
+    let mut owners = std::collections::BTreeSet::new();
     for (_, index) in &out {
         for id in index.properties.keys() {
             ensure!(
@@ -306,30 +296,51 @@ pub fn indexes(root: &Path) -> Result<Vec<(String, Index)>> {
 }
 
 fn specifications(root: &Path) -> Result<BTreeMap<String, String>> {
-    let mut out = BTreeMap::new();
-    for (source, _) in indexes(root)? {
-        let dir = source_dir(root, &source)?.join("specs");
-        safe_parent(root, &dir)?;
+    fn visit(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) -> Result<()> {
         if !dir.exists() {
-            continue;
+            return Ok(());
         }
+        safe_parent(root, dir)?;
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
                 continue;
             }
-            let id = entry.file_name().to_string_lossy().into_owned();
-            ensure!(valid_id(&id), "Invalid specification ID: {id}");
-            ensure!(
-                out.insert(id.clone(), format!("source/{source}/specs/{id}"))
-                    .is_none(),
-                "Duplicate specification ID: {id}"
-            );
+            let folder = entry.path();
+            if folder.join("index.json").exists() || folder.join("requirements.json").exists() {
+                let specs = folder.join("specs");
+                if specs.exists() {
+                    safe_parent(root, &specs)?;
+                    for bundle in fs::read_dir(specs)? {
+                        let bundle = bundle?;
+                        if !bundle.file_type()?.is_dir() {
+                            continue;
+                        }
+                        let id = bundle.file_name().to_string_lossy().into_owned();
+                        ensure!(valid_id(&id), "Invalid specification ID: {id}");
+                        let relative = bundle
+                            .path()
+                            .strip_prefix(root.join(".intent"))?
+                            .to_string_lossy()
+                            .replace('\\', "/");
+                        ensure!(
+                            out.insert(id.clone(), relative).is_none(),
+                            "Duplicate specification ID: {id}"
+                        );
+                    }
+                }
+            } else {
+                visit(root, &folder, out)?;
+            }
         }
+        Ok(())
     }
+    let mut out = BTreeMap::new();
+    visit(root, &root.join(".intent/source"), &mut out)?;
     Ok(out)
 }
 
+/// New bundles are independent; an explicit ID selects an existing bundle for update.
 pub fn specification(root: &Path, ids: &[Value], existing: Option<&str>) -> Result<Value> {
     if ids.is_empty() {
         ensure!(existing.is_none(), "--spec-id requires --requirement");
@@ -392,37 +403,71 @@ pub fn property_removal(root: &Path, id: &str) -> Result<Vec<(String, Index)>> {
     Ok(changes)
 }
 
+/// Internal collection for request construction; agents read project files directly.
+pub fn collect(root: &Path, paths: &[String]) -> Result<Value> {
+    let docs = crate::requirements::documents(root)?;
+    let requirements: Vec<_> = docs
+        .iter()
+        .flat_map(|(_, _, doc)| &doc.requirements)
+        .filter(|r| paths.is_empty() || r.targets.iter().any(|t| paths.contains(&t.path)))
+        .collect();
+    let mut properties = BTreeMap::new();
+    for (source, index) in indexes(root)? {
+        for (id, selection) in index.properties {
+            if requirements.iter().any(|r| r.id == id) {
+                let specs: Vec<_> = selection
+                    .specs
+                    .iter()
+                    .map(|path| {
+                        let file = spec_path(root, path)?;
+                        let text = fs::read_to_string(file).ok();
+                        Ok(json!({"path":path,"sha256":text.as_ref().map(hash),"content":text}))
+                    })
+                    .collect::<Result<_>>()?;
+                properties.insert(
+                    id,
+                    json!({"owner":source,"specs":specs,"last_run":selection.last_run}),
+                );
+            }
+        }
+    }
+    Ok(
+        json!({"schema_version":1,"brief":crate::requirements::brief(root)?,"requirements":requirements,"properties":properties}),
+    )
+}
+
+/// Freeze the property selection and working versions before submitting an operation.
 pub fn property_snapshot(
     root: &Path,
     ids: &[Value],
     inputs: &[(String, Vec<u8>)],
     specification: &Value,
 ) -> Result<Value> {
-    let docs = crate::requirements::documents(root)?;
-    let indexes = indexes(root)?;
+    let context = collect(root, &[])?;
     let mut properties = Vec::new();
     for bound in ids {
         let id = bound["id"].as_str().context("Missing property ID")?;
-        let record = docs
+        let record = context["requirements"]
+            .as_array()
+            .context("Missing requirements")?
             .iter()
-            .flat_map(|(_, _, doc)| &doc.requirements)
-            .find(|r| r.id == id)
+            .find(|r| r["id"] == id)
             .context("Unknown property")?;
-        let (owner, index) = indexes
-            .iter()
-            .find(|(_, index)| index.properties.contains_key(id))
+        let owner = context["properties"][id]["owner"]
+            .as_str()
             .context("Property has no owning index")?;
-        let selection = &index.properties[id];
-        let sources: Vec<_> = record
-            .targets
+        let index = read_index(root, owner)?;
+        let selection = index
+            .properties
+            .get(id)
+            .context("Property has no owning index")?;
+        let sources: Vec<_> = record["targets"]
+            .as_array()
+            .context("Missing targets")?
             .iter()
             .map(|target| {
-                let file = root.join(&target.path).canonicalize()?;
-                ensure!(
-                    file.starts_with(root),
-                    "Property source is outside the repository"
-                );
-                Ok(json!({"path":target.path,"sha256":hash(fs::read(file)?)}))
+                let path = target["path"].as_str().context("Missing target path")?;
+                Ok(json!({"path":path,"sha256":hash(fs::read(root.join(path))?)}))
             })
             .collect::<Result<_>>()?;
         let mut specs = BTreeMap::new();
@@ -449,11 +494,37 @@ pub fn property_snapshot(
     Ok(json!(properties))
 }
 
-/// Link only formal versions from this operation's exact submission manifest.
+/// Map current destinations to the formal versions actually submitted for this operation.
+pub fn submitted_specs(request: &Value, property: &Value, run: &str) -> Result<Vec<Value>> {
+    let inputs = request["inputs"]
+        .as_array()
+        .context("Missing submitted inputs")?;
+    property["outputs"]
+        .as_array()
+        .context("Missing formal input mapping")?
+        .iter()
+        .map(|output| {
+            let name = output["input"].as_str().context("Missing formal input")?;
+            crate::requirements::relative_path(name)?;
+            let frozen = format!("logs/{run}/inputs/{name}");
+            let input = inputs
+                .iter()
+                .find(|input| input["path"] == frozen)
+                .context("Formal input is absent from the submission manifest")?;
+            let sha256 = input["sha256"]
+                .as_str()
+                .context("Missing submitted input hash")?;
+            let path = output["path"]
+                .as_str()
+                .context("Missing specification destination")?;
+            Ok(json!({"path":path,"sha256":sha256}))
+        })
+        .collect()
+}
+
+/// Promote explicit property-associated formal inputs after a terminal operation.
 pub fn finish_properties(root: &Path, evidence: &Path, successful: bool) -> Result<()> {
     let _lock = lock(root)?;
-    safe_parent(root, &evidence.join("request.json"))?;
-    safe_parent(root, &evidence.join("result.json"))?;
     let request: Value = serde_json::from_slice(&fs::read(evidence.join("request.json"))?)?;
     let run = evidence
         .file_name()
@@ -470,9 +541,10 @@ pub fn finish_properties(root: &Path, evidence: &Path, successful: bool) -> Resu
         let Some(selection) = index.properties.get_mut(id) else {
             continue;
         };
-        if selection.last_run.as_deref() == Some(run)
-            || serde_json::to_value(&*selection)? != property["selection"]
-        {
+        if selection.last_run.as_deref() == Some(run) {
+            continue;
+        }
+        if serde_json::to_value(&*selection)? != property["selection"] {
             continue;
         }
         let record = docs
@@ -527,30 +599,18 @@ pub fn finish_properties(root: &Path, evidence: &Path, successful: bool) -> Resu
         if !sources_match || !specs_match || !inputs_match {
             continue;
         }
-        let mut submitted = Vec::new();
-        for output in property["outputs"].as_array().into_iter().flatten() {
-            let name = output["input"].as_str().context("Missing formal input")?;
-            crate::requirements::relative_path(name)?;
-            let frozen = format!("logs/{run}/inputs/{name}");
-            let input = request["inputs"]
-                .as_array()
-                .context("Missing submitted inputs")?
-                .iter()
-                .find(|input| input["path"] == frozen)
-                .context("Formal input is absent from the submission manifest")?;
-            let sha256 = input["sha256"]
-                .as_str()
-                .context("Missing submitted input hash")?;
-            let path = output["path"]
-                .as_str()
-                .context("Missing current specification path")?;
-            submitted.push(json!({"path":path,"sha256":sha256}));
-            if successful {
+        if successful {
+            for output in property["outputs"].as_array().into_iter().flatten() {
+                let name = output["input"].as_str().context("Missing formal input")?;
+                crate::requirements::relative_path(name)?;
                 let bytes = fs::read(evidence.join("inputs").join(name))?;
                 let artifact = evidence.join("artifacts").join(name);
                 safe_parent(root, &artifact)?;
                 fs::create_dir_all(artifact.parent().context("Missing artifact parent")?)?;
                 fs::write(artifact, &bytes)?;
+                let path = output["path"]
+                    .as_str()
+                    .context("Missing current specification path")?;
                 let file = spec_path(root, path)?;
                 fs::create_dir_all(file.parent().context("Missing specification parent")?)?;
                 let temporary = file.with_file_name(format!(".{}.tmp", uuid::Uuid::new_v4()));
@@ -561,9 +621,10 @@ pub fn finish_properties(root: &Path, evidence: &Path, successful: bool) -> Resu
                     selection.specs.push(path.into());
                 }
             }
+            selection.specs.sort();
         }
-        selection.specs.sort();
         selection.last_run = Some(run.into());
+        let submitted = submitted_specs(&request, property, run)?;
         if !result["properties"].is_object() {
             result["properties"] = json!({});
         }
