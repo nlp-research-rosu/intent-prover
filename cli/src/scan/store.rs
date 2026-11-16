@@ -1,7 +1,6 @@
 use super::{
     http::Api,
-    snapshot,
-    support::{hash, now, read, string, valid_id, write, write_json},
+    support::{hash, now, read, string, write, write_json},
 };
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
@@ -11,43 +10,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const README: &str = "# .intent\n\nProject knowledge and evidence from explicitly requested Scans and proofs.\nCommit this folder with the source; do not blanket-ignore it.\n\n- prove/<target>/: proof inputs, scope and PROOF.md; prove/sessions/ is local CLI state.\n- scan/<task-id>/: collected report.json and meta.json with source hashes and collection status.\n- NOTES.md: confirmed intended behaviour, included in later scans.\n\nScan commands wait for completion and save results. Use collect to resume an interrupted\nScan without resubmitting source. No automatic hooks or reviews run. Supporting Scan files remain remote.\n\nTransient .queue, .sent.log and .storage.lock files are not committed.\nThe sent log records upload metadata, never source contents. Old queues are not consumed.\n";
-
 pub(super) fn prepare(root: &Path, id: Option<&str>) -> Result<PathBuf> {
     ensure!(
-        root.is_dir() && id.is_none_or(valid_id),
+        root.is_dir() && id.is_none_or(crate::storage::valid_id),
         "Invalid Scan destination"
     );
-    let base = root.join(".intent");
-    ensure!(
-        !fs::symlink_metadata(&base).is_ok_and(|m| m.is_symlink()),
-        ".intent is a symlink"
-    );
-    fs::create_dir_all(&base)?;
-    for (name, content) in [
-        ("README.md", README),
-        (".ignore", "*\n"),
-        (".gitignore", ".sent.log\n.queue\n.storage.lock\n"),
-    ] {
-        let file = base.join(name);
-        if !file.exists() {
-            write(&file, content.as_bytes(), false)?;
-        }
-    }
+    let base = crate::storage::initialize(root)?;
     let dir = match id {
-        Some(id) => base.join("scan").join(id),
-        None => base.join("scan"),
+        Some(id) => base.join("logs").join(id).join("artifacts"),
+        None => base.join("logs"),
     };
-    let mut ancestor = dir.as_path();
-    while !ancestor.exists() {
-        ancestor = ancestor
-            .parent()
-            .expect("Scan directory has repository ancestor");
-    }
-    ensure!(
-        snapshot::canonical(ancestor)?.starts_with(snapshot::canonical(&base)?),
-        "Scan destination is outside .intent"
-    );
+    crate::storage::safe_parent(root, &dir)?;
     fs::create_dir_all(&dir)?;
     // Check actual writability before submitting source, even when the directory exists.
     let probe = dir.join(format!(".scan-{}.tmp", uuid::Uuid::new_v4()));
@@ -62,9 +35,17 @@ pub(super) fn prepare(root: &Path, id: Option<&str>) -> Result<PathBuf> {
 pub(super) fn metadata(scan: &Value, task: Option<&Value>, api: &Api) -> Result<(PathBuf, Value)> {
     let dir = prepare(
         Path::new(string(&scan["repo_root"])),
-        Some(string(&scan["job_id"])),
+        Some(string(&scan["operation_id"])),
     )?;
     let previous = read(&dir.join("meta.json"));
+    let saved_task = task.cloned().unwrap_or_else(|| {
+        read(
+            &dir.parent()
+                .expect("Scan artifacts have an operation directory")
+                .join("result.json"),
+        )["task"]
+            .clone()
+    });
     let task = task.map(|task| {
         let reference = &task["result"]["report"];
         let report = if reference.is_null() { Value::Null } else {
@@ -97,6 +78,16 @@ pub(super) fn metadata(scan: &Value, task: Option<&Value>, api: &Api) -> Result<
         }
     }
     write_json(&dir.join("meta.json"), &meta, false)?;
+    let result = dir
+        .parent()
+        .expect("Scan artifacts have an operation directory")
+        .join("result.json");
+    crate::storage::safe_parent(Path::new(string(&scan["repo_root"])), &result)?;
+    write_json(
+        &result,
+        &json!({"operation":"scan","task":saved_task,"scan":meta,"reportUrl":scan["url"]}),
+        false,
+    )?;
     Ok((dir, meta))
 }
 
@@ -125,6 +116,13 @@ pub(super) fn report(scan: &Value, task: &Value, api: &Api) -> Result<Value> {
         }
     }
     write_json(&dir.join("meta.json"), &meta, false)?;
+    write_json(
+        &dir.parent()
+            .expect("Scan artifacts have an operation directory")
+            .join("result.json"),
+        &json!({"operation":"scan","task":task,"scan":meta,"reportUrl":scan["url"]}),
+        false,
+    )?;
     Ok(meta["report"].clone())
 }
 

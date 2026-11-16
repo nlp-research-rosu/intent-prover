@@ -98,12 +98,12 @@ function fileView(path) {
 }
 function records() {
   const paths = Object.keys(data.files).sort();
-  const scans = paths.filter(p => /^scan\/[^/]+\/meta.json$/.test(p))
+  const scans = paths.filter(p => /^(?:scan\/[^/]+|logs\/[^/]+\/artifacts)\/meta\.json$/.test(p))
     .map(p => ({ path: p, meta: json(p), report: json(p.replace(/meta.json$/, 'report.json')) })).filter(s => s.meta);
   for (const scan of scans) scan.progress = data.scanStates[scan.meta.task_id] || { status: scan.meta.task?.status || scan.meta.status };
-  const operations = paths.filter(p => /^prove\/sessions\/[^/]+\/[^/]+\/result.json$/.test(p))
-    .map(p => ({ path: p, evidence: json(p) })).filter(o => o.evidence?.task);
-  const targets = [...new Set(paths.filter(p => /^prove\/(?!sessions\/)/.test(p) && /\/(PROOF|SCOPE)\.md$/.test(p)).map(p => p.slice(0, p.lastIndexOf('/') + 1)))];
+  const operations = paths.filter(p => /^(?:logs\/[^/]+|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(p))
+    .map(p => ({ path: p, evidence: json(p) })).filter(o => o.evidence?.task && o.evidence.operation !== 'scan');
+  const targets = [...new Set(paths.filter(p => /^(?:prove\/(?!sessions\/)|logs\/[^/]+\/artifacts\/|source\/)/.test(p) && /\/(PROOF|SCOPE)\.md$/.test(p)).map(p => p.slice(0, p.lastIndexOf('/') + 1)))];
   const active = [];
   for (const s of scans) {
     if (!terminal.has(s.progress.status)) active.push({ id: s.meta.task_id, kind: 'Scan', status: s.progress.status, paths: [s.meta.scope || 'Whole repository'], url: s.meta.url, submittedAt: s.meta.created_at });
@@ -129,7 +129,7 @@ function scanOutcome(s) {
 }
 function overview(r) {
   const rows = r.scans.map(s => `<tr><td><button class="link-button" data-scan="${escape(s.path)}">${escape(s.meta.scope || 'Whole repository')}</button><span class="subline">Scan · ${escape(s.meta.depth)}</span></td><td>${scanOutcome(s)}</td><td class="mono small muted">${escape(s.meta.task_id?.slice(0, 8))}</td><td class="small muted">${date(s.meta.created_at)}</td><td class="result-action">${serviceLink(s.meta.url) || '—'}</td></tr>`);
-  rows.push(...r.targets.map(target => `<tr><td><button class="link-button" data-proof="${escape(target)}">${escape(target.slice(6, -1))}</button><span class="subline">${Object.hasOwn(data.files, target + 'PROOF.md') ? 'Proof report' : 'Proof scope'}</span></td><td>${badge('Read scope and assumptions')}</td><td>—</td><td>—</td><td class="result-action">—</td></tr>`));
+  rows.push(...r.targets.map(target => `<tr><td><button class="link-button" data-proof="${escape(target)}">${escape(target.replace(/\/$/, ''))}</button><span class="subline">${Object.hasOwn(data.files, target + 'PROOF.md') ? 'Proof report' : 'Proof scope'}</span></td><td>${badge('Read scope and assumptions')}</td><td>—</td><td>—</td><td class="result-action">—</td></tr>`));
   rows.push(...r.operations.filter(o => o.evidence.task.kind === 'proof').map(o => `<tr><td><button class="link-button" data-file="${escape(o.path)}">Proof job</button><span class="subline">${escape(o.path.split('/').at(-2))}</span></td><td>${status(o.evidence.task.result || o.evidence.task.status)}</td><td class="mono small muted">${escape(o.evidence.task.id.slice(0, 8))}</td><td class="small muted">${date(o.evidence.task.finishedAt || o.evidence.task.createdAt)}</td><td class="result-action">${serviceLink(o.evidence.reportUrl) || '—'}</td></tr>`));
   return heading(data.name, 'Scan and proof results for this repository.')
     + `<div class="stack"><div class="metrics">${[[r.active.length, 'Active checks'], [r.scans.length, 'Scans'], [r.paths.length, 'Local artifacts']].map(([n, label]) => `<div class="card metric"><div class="label">${label}</div><div class="value">${n}</div></div>`).join('')}</div>`
@@ -163,24 +163,24 @@ function scansPage(r) {
     + `<div class="row small mono muted" style="margin-bottom:15px">${escape(meta.task_id)} ${status(meta.report?.status)}</div><div class="tabs"><button data-scan-tab="report" class="${state.scanTab === 'report' ? 'active' : ''}">Report</button><button data-scan-tab="metadata" class="${state.scanTab === 'metadata' ? 'active' : ''}">Scan metadata</button></div><div class="stack">${body}</div>`;
 }
 function operationsView(r) {
-  const files = r.paths.filter(p => p.startsWith('prove/sessions/') && !r.operations.some(o => o.path === p));
+  const files = r.paths.filter(p => /^logs\/[^/]+\/artifacts\//.test(p) && !/\/(?:meta|report)\.json$/.test(p) && !r.operations.some(o => o.path === p));
   if (!r.operations.length && !files.length) return empty('No verification runs', 'Run, validation and proof results appear here.');
   return `<div class="stack">${r.operations.map(o => {
     const task = o.evidence.task;
     return `<div class="card card-body"><div class="row between"><div><h3>${escape(human(task.kind))} · ${escape(o.path.split('/').at(-2))}</h3><p class="small mono muted">${escape(task.id)}</p></div><div class="row">${status(task.status)}${task.result ? status(task.result) : ''}${serviceLink(o.evidence.reportUrl)}</div></div><p class="small muted" style="margin-top:13px">${(task.toolRuns || []).map(run => `${escape(run.tool)}: exit ${escape(run.exitCode ?? 'not provided')}`).join(' · ') || 'No tool runs recorded'}</p><details ${state.file === o.path ? 'open' : ''}><summary>Result JSON</summary>${fileView(o.path)}</details></div>`;
-  }).join('')}${files.length ? `<div class="card card-body"><h2>Verification files</h2>${files.map(path => `<details ${state.file === path ? 'open' : ''}><summary class="mono">${escape(path.slice('prove/sessions/'.length))}</summary>${fileView(path)}</details>`).join('')}</div>` : ''}</div>`;
+  }).join('')}${files.length ? `<div class="card card-body"><h2>Verification files</h2>${files.map(path => `<details ${state.file === path ? 'open' : ''}><summary class="mono">${escape(path)}</summary>${fileView(path)}</details>`).join('')}</div>` : ''}</div>`;
 }
 function proofsPage(r) {
   const target = r.targets.includes(state.proof) ? state.proof : r.targets[0];
   state.proof = target;
   let select = '';
-  if (r.targets.length > 1) select = `<div class="select-row"><label class="small muted">Target <select id="proof-select">${r.targets.map(t => `<option value="${escape(t)}" ${t === target ? 'selected' : ''}>${escape(t.slice(6, -1))}</option>`).join('')}</select></label></div>`;
+  if (r.targets.length > 1) select = `<div class="select-row"><label class="small muted">Target <select id="proof-select">${r.targets.map(t => `<option value="${escape(t)}" ${t === target ? 'selected' : ''}>${escape(t.replace(/\/$/, ''))}</option>`).join('')}</select></label></div>`;
   const available = target ? [['report', 'Proof report', 'PROOF.md'], ['scope', 'Scope', 'SCOPE.md']].filter(([, , file]) => Object.hasOwn(data.files, target + file)) : [];
   available.push(['operations', 'Verification runs']);
   if (!available.some(([id]) => id === state.proofTab)) state.proofTab = available[0][0];
   const tab = available.find(([id]) => id === state.proofTab);
   const body = state.proofTab === 'operations' ? operationsView(r) : `<div class="card">${fileView(target + tab[2])}</div>`;
-  return heading(target ? target.slice(6, -1) : 'Proofs', 'Proof reports, scope and verification runs. Read claim coverage and assumptions; a server result is not a scope audit.') + select
+  return heading(target ? target.replace(/\/$/, '') : 'Proofs', 'Proof reports, scope and verification runs. Read claim coverage and assumptions; a server result is not a scope audit.') + select
     + `<div class="tabs">${available.map(([id, label]) => `<button data-proof-tab="${id}" class="${id === state.proofTab ? 'active' : ''}">${label}</button>`).join('')}</div>${body}`
     + (target ? `<div class="row" style="margin-top:16px">${r.paths.filter(p => p.startsWith(target) && !p.slice(target.length).includes('/') && !['PROOF.md', 'SCOPE.md'].includes(p.slice(target.length))).map(p => fileButton(p, p.slice(target.length))).join('')}</div>` : '');
 }
@@ -189,7 +189,7 @@ function artifactsPage(r) {
   if (!r.artifacts.includes(state.file)) state.file = r.artifacts[0];
   const groups = new Map();
   for (const path of r.artifacts) {
-    const group = path.startsWith('prove/') ? 'Formal proof' : path.startsWith('scan/') ? 'Scan' : 'Workspace';
+    const group = path.startsWith('source/') ? 'Requirements and specifications' : path.startsWith('logs/') ? 'Operation evidence' : path.startsWith('prove/') ? 'Formal proof' : path.startsWith('scan/') ? 'Scan' : 'Workspace';
     if (!groups.has(group)) groups.set(group, []);
     groups.get(group).push(path);
   }
@@ -259,7 +259,7 @@ document.addEventListener('click', async event => {
   if (d.proofTab) state.proofTab = d.proofTab;
   if (d.file) {
     state.file = d.file;
-    state.view = d.file.startsWith('prove/sessions/') ? 'proofs' : 'artifacts';
+    state.view = /^(?:logs\/[^/]+|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(d.file) ? 'proofs' : 'artifacts';
     if (state.view === 'proofs') state.proofTab = 'operations';
   }
   navigate();

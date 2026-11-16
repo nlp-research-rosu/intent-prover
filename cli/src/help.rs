@@ -36,7 +36,7 @@ Configuration help explains settings, timeouts, and cancellation behavior."#;
 
 pub const SCAN: &str = r#"Submits tracked and non-ignored working-tree text from a Git repository.
 The optional file or folder is resolved from the current directory. Evidence
-always goes under .intent/scan/<task-id>/ at the repository root.
+always goes under .intent/logs/<operation-id>/artifacts/ at the repository root.
 An optional depth word selects fast (default), balanced or full. Place the
 target and depth in either order. Give only one target and one depth.
 
@@ -105,7 +105,8 @@ or validate to resubmit. Task help explains recovery.
 Session counters live in sessions/<ID>/session.json beside config.toml; shared
 language sources live in semantics/<id>/<commit>/ there too.
 The same XDG_CONFIG_HOME / APPDATA / home-directory rules apply to all three.
-Working files and results live in <project>/.intent/prove/sessions/<ID>/.
+Authoring scratch lives in <project>/.intent/prove/sessions/<ID>/.
+Durable inputs, results and artifacts live in <project>/.intent/logs/<operation-id>/.
 Inside a repository, <project> is always its root, not the working directory.
 Existing project-local descriptors are left untouched and are not imported.
 
@@ -181,7 +182,7 @@ Run, validation, and proof limits are independent. At the limit, the next run
 is refused with local status exhausted and exit 20; the last run's backend
 result and exit code are not overwritten.
 task.result is success or error; the configuration is in saved stdout.
-Evidence is stored under <workspaceDir>/run-NNN/result.json, with inline
+Evidence is stored under .intent/logs/<operation-id>/result.json, with inline
 stdout and stderr. The snapshot is updated from acceptance to completion.
 Configuration help explains timeout and cancellation behavior."#;
 
@@ -191,7 +192,7 @@ Outside a repository, that directory is the project root.
 Start creates a fresh session ID with zero operation counters.
 The global session.json records only its ID, projectRoot, semantics identity,
 attemptsUsed, validationsUsed, and runsUsed. Settings remain in config.toml.
-Each operation has its own sequence: run-NNN, validation-NNN, proof-NNN.
+Each operation has a distinct six-character local ID under .intent/logs/.
 Each accepted operation increments only its own counter.
 
 Create inputs/ inside the returned workspaceDir and write session input files
@@ -291,7 +292,7 @@ const EVIDENCE: &str = r#"Evidence:
   retains previously saved logs and records stdoutError or stderrError.
   New submissions save reportUrl beside task: it points to the console configured
   when the job was accepted and survives later configuration changes.
-  For a user handoff, update .intent/prove/<target>/PROOF.md and SCOPE.md, then
+  For a user handoff, write PROOF.md and SCOPE.md in the returned proofDir, then
   export a new HTML report with the viewer's --output option. Present the
   local HTML first; remote jobs and raw evidence are secondary. Export is local
   and needs no sign-in. Preserve the actual outcome, scope and assumptions.
@@ -308,7 +309,7 @@ Validation results:
   task.result (valid or invalid), task.toolRuns, and task.error for evidence.
   Neither compilation nor a valid result establishes proof or non-vacuity.
   Accepted submissions increment validationsUsed and are retained under
-  <workspaceDir>/validation-NNN/, including failed tasks. The response includes
+  .intent/logs/<operation-id>/, including failed tasks. The response includes
   budget (used, limit, remaining) and evidenceDir. At the limit, the next
   validation is refused with local status exhausted and exit 20; the last
   validation's backend result and exit code are not overwritten.\n\n{EVIDENCE}"
@@ -321,8 +322,11 @@ pub fn prove() -> String {
 Proof results and attempts:
   Each server-accepted proof consumes one attempt, including interruption,
   timeout, replay, and audit mutation. Evidence is stored under
-  <workspaceDir>/proof-NNN/. The response includes the backend task unchanged,
-  sessionId, budget (used, limit, remaining), and evidenceDir.
+  .intent/logs/<operation-id>/. The response includes the backend task unchanged,
+  sessionId, budget (used, limit, remaining), evidenceDir and proofDir (artifacts/).
+  --requirement associates local properties with submitted formal inputs.
+  --spec-id explicitly selects an existing bundle; otherwise a new bundle is used.
+  Associations stay local and do not establish proof coverage or freshness.
   Exit code: the last task.toolRuns entry's exitCode when a tool ran. A completed
   reused result with no tool runs exits 0, whether proved or notProved.
   Zero alone does not establish proof. Nonzero tool exits pass through unchanged;
@@ -357,18 +361,18 @@ the included .intent evidence. It does not include source workspaces,
 credentials, plugin prompts or transcripts. Symlinks and hidden files are not
 exported. Saved Scan reports include findings, coverage and source metadata;
 supporting Scan detail files remain remote. Proofs display existing PROOF.md,
-SCOPE.md and session evidence; the viewer does not generate those documents.
+SCOPE.md and operation evidence; the viewer does not generate those documents.
 Present one local HTML link as the user handoff, not raw JSON or a console login.
 The HTML includes optional Open job in Prover links from saved Scan URLs and new
 proof-operation reportUrl records. It never guesses missing historical URLs
 from current configuration. Remote jobs may require sign-in; local viewing does not.
 
-Append #view=scans&scan=scan%2F<TASK_ID>%2Fmeta.json to open a specific Scan, or
-#view=proofs&proof=prove%2F<TARGET>%2F&proofTab=report for a proof report.
+Append #view=scans&scan=logs%2F<OPERATION_ID>%2Fartifacts%2Fmeta.json for a Scan, or
+#view=proofs&proof=logs%2F<OPERATION_ID>%2Fartifacts%2F&proofTab=report for a proof report.
 URL-encode paths in these fragments. Hash links select local content only.
 
 The name comes from the origin repository name, falling back to the root folder.
-Scan reports and proof sessions come from this project's .intent directory.
+Scan reports and proof evidence come from this project's .intent directory.
 Scan progress comes from installed Claude Code/Codex plugin data; set
 --plugin-data for a custom or isolated plugin installation. Scan status is the
 last locally saved state, not a fresh server status."#;

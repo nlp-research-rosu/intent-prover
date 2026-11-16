@@ -31,6 +31,17 @@ pub fn workspace(session: &Session) -> PathBuf {
         .join(session.session_id.to_string())
 }
 
+pub fn legacy_operation(name: &str) -> Option<&str> {
+    let (phase, number) = name.split_once('-')?;
+    number.parse::<u32>().ok()?;
+    match phase {
+        "proof" => Some("prove"),
+        "validation" => Some("validate"),
+        "run" => Some("run"),
+        _ => None,
+    }
+}
+
 // Session state is scratch; specs and PROOF.md elsewhere under .intent/ are meant to be committed.
 fn ignore_sessions(session: &Session) -> Result<()> {
     let dir = session.project_root.join(".intent/prove/sessions");

@@ -231,6 +231,19 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
     store::prepare(&snap.root, None)?;
     support::mkdir(&data, true)?;
     support::mkdir(&data.join("scans"), true)?;
+    let evidence = crate::storage::operation(
+        &snap.root,
+        json!({
+            "operation":"scan","api_url":api.config.server_url,"source":snap.source,
+            "depth":depth.as_str(),"host":args.plugin.host.as_str(),
+            "snapshot_retained":false,"upload_sha256":support::hash(&snap.gz)
+        }),
+        &[],
+    )?;
+    let operation_id = evidence
+        .file_name()
+        .and_then(|s| s.to_str())
+        .context("Missing Scan operation ID")?;
     let idem = uuid::Uuid::new_v4().simple().to_string();
     let mut response = api.submit(&snap.gz, &idem);
     if response.status == 429
@@ -245,15 +258,20 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
     }
     let id = string(&response.body["id"]);
     if response.status != 202 || !valid_id(id) {
+        write_json(
+            &evidence.join("result.json"),
+            &json!({"status":"submission_failed","error":response.code()}),
+            false,
+        )?;
         return Ok(format!(
             "Intent Prover: {}",
             http::submit_failure(&api, &response)
         ));
     }
     let url = api.url(id);
-    let mut scan = json!({"v":1,"job_id":id,"url":url,"repo_root":snap.root,"created_at":now(),"host":args.plugin.host.as_str(),"scope":snap.source["scope"],"depth":depth.as_str(),"status":"queued","api_url":api.config.server_url,"source":snap.source,"report_status":"pending"});
+    let mut scan = json!({"v":1,"operation_id":operation_id,"job_id":id,"url":url,"repo_root":snap.root,"created_at":now(),"host":args.plugin.host.as_str(),"scope":snap.source["scope"],"depth":depth.as_str(),"status":"queued","api_url":api.config.server_url,"source":snap.source,"report_status":"pending"});
     save(&data, &scan)?;
-    store::metadata(&scan, None, &api)?;
+    store::metadata(&scan, Some(&response.body), &api)?;
     store::sent_log(
         &snap.root,
         json!({"at":scan["created_at"],"mode":"scan","job_id":id,"url":url,"files":snap.files,"bytes":snap.bytes,"redactions":snap.redactions}),
@@ -280,6 +298,26 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
 
 fn collect_one(scan: &mut Value, data: &Path, api: &Api) -> Result<String> {
     let id = string(&scan["job_id"]).to_owned();
+    if scan["operation_id"].is_null() {
+        // Explicit recovery creates a new evidence log; existing files are never moved.
+        let evidence = crate::storage::operation(
+            Path::new(string(&scan["repo_root"])),
+            json!({
+                "operation":"scan","recovered_task":id,"api_url":scan["api_url"],
+                "source":scan["source"],"depth":scan["depth"],"host":scan["host"],
+                "snapshot_retained":false,"upload_sha256":scan["source"]["snapshot_sha256"]
+            }),
+            &[],
+        )?;
+        scan["operation_id"] = json!(
+            evidence
+                .file_name()
+                .and_then(|s| s.to_str())
+                .context("Missing Scan operation ID")?
+        );
+        save(data, scan)?;
+    }
+    let operation_id = string(&scan["operation_id"]).to_owned();
     let mut failures = 0;
     let response = loop {
         let response = api.task(&id);
@@ -331,7 +369,7 @@ fn collect_one(scan: &mut Value, data: &Path, api: &Api) -> Result<String> {
         }
         lines.push(render::scan(scan));
         lines.push(if report["status"] == "saved" {
-            format!("Saved report: .intent/scan/{id}/report.json")
+            format!("Saved report: .intent/logs/{operation_id}/artifacts/report.json")
         } else {
             format!(
                 "Report {}{}; use collect again to retry.",
@@ -357,7 +395,7 @@ fn collect_one(scan: &mut Value, data: &Path, api: &Api) -> Result<String> {
     }
     save(data, scan)?;
     store::metadata(scan, Some(&response.body), api)?;
-    lines.push(format!("Local HTML report: from the repository root, run {} view --output <new-file.html>. Present that HTML link first; open it at #view=scans&scan=scan%2F{id}%2Fmeta.json. The remote job link is inside.",channel::settings().cli));
+    lines.push(format!("Local HTML report: from the repository root, run {} view --output <new-file.html>. Present that HTML link first; open it at #view=scans&scan=logs%2F{operation_id}%2Fartifacts%2Fmeta.json. The remote job link is inside.",channel::settings().cli));
     let result = lines.join("\n");
     ensure!(scan["status"] == "done", "{result}");
     Ok(result)

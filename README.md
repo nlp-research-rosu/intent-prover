@@ -16,7 +16,7 @@ Before starting a remote Scan or Prove operation, the agent explains what will b
 
 Scan masks obvious secrets locally and never sends files such as `.env*`, private keys or credential files. Redaction is not a substitute for reviewing the requested scope. Scan upload metadata is listed in `.intent/.sent.log`; it does not contain source contents.
 
-Project knowledge and evidence under `.intent/` are meant to be committed with source. Transient `.queue`, `.sent.log`, `.storage.lock` and proof-session state stay ignored; do not blanket-ignore `.intent/`.
+Project knowledge and evidence under `.intent/` are meant to be committed with source. Transient `.sent.log`, `.storage.lock` and proof-session scratch stay ignored; do not blanket-ignore `.intent/`.
 
 ## Install (Claude Code)
 
@@ -61,7 +61,15 @@ Endpoint settings are shared in `config.toml` beside credentials: `server_url` s
 
 The single `intent-prover` skill contains onboarding, Scan and Prove guides, with detailed references loaded only as needed. `/intent:prove [what to prove]` follows its Prove guide, invoking the global CLI directly. Scan is not a prerequisite. K proofs establish partial correctness: if the program terminates and the precondition holds, the postcondition holds. Writing or auditing new language semantics is not included.
 
-Proof inputs and documents live in `.intent/prove/<target>/`; commit them. `.intent/prove/sessions/` is local session state. Commands detect the repository root even from subdirectories; outside Git, they use the project directory. Explicit CLI operations collect their results, with task recovery documented in `intent-prover task --help`.
+Proof operations retain exact submitted inputs and results in `.intent/logs/<operation-id>/`; commit them. The returned `proofDir` points to `artifacts/` for `PROOF.md`, `SCOPE.md` and reproduction commands. `.intent/prove/sessions/` remains local authoring scratch. Commands detect the repository root even from subdirectories; outside Git, they use the project directory. Explicit CLI operations collect their results, with task recovery documented in `intent-prover task --help`.
+
+## Project storage
+
+`.intent/REQUIREMENTS.md` holds project-wide human intent. Structured one-file requirements live in `.intent/source/<source-path>/requirements.json`; cross-file requirements live in `.intent/source/requirements.json`. Each requirement has one owning per-source `index.json`, with links to actual current formal files under `specs/<bundle-id>/` and its last applicable operation.
+
+Use the local `requirements` commands to manage those records. Proof and validation commands optionally accept `--requirement <id>` and `--spec-id <id>`; neither is required for ordinary Scan/Prove use. These associations stay local and do not certify a property. Successful associated formal inputs can become current spec copies; failed or stale attempts do not replace them.
+
+Every new operation uses `.intent/logs/<operation-id>/{request.json,result.json,inputs/,artifacts/}`. Local requirement, bundle and operation IDs use six lowercase letters/digits with project-local collision checks. Server task IDs and proof-session IDs are unchanged. Existing evidence remains in place, without automatic migration. See the skill's [storage reference](skills/intent-prover/references/storage.md) for ownership, scope and submitted-version rules.
 
 ## The `intent-prover` command
 
@@ -130,9 +138,9 @@ Run from inside a Git repository. With no path, Scan snapshots the repository; o
 | `balanced` | 30–35 minutes |
 | `full` | 40–45 minutes |
 
-The command prints a report link, then polls until the task finishes, saves its evidence and returns findings. Keep it running, as with Prove. Polling uses the shared `poll_interval_seconds` setting (default 10 seconds); transient status-request failures retry after 1, 2 and 4 seconds. No detached worker or later-message hook is involved. Collection saves reports under `.intent/scan/<task-id>/report.json`, with task/source metadata in `meta.json`. Report downloads are checked against their stated size and SHA-256. No source contents are copied into the Scan evidence folder.
+The command prints a report link, then polls until the task finishes, saves its evidence and returns findings. Keep it running, as with Prove. Polling uses the shared `poll_interval_seconds` setting (default 10 seconds); transient status-request failures retry after 1, 2 and 4 seconds. No detached worker or later-message hook is involved. Collection saves reports under `.intent/logs/<operation-id>/artifacts/report.json`, with task/source metadata in `meta.json` and operation records beside `artifacts/`. Report downloads are checked against their stated size and SHA-256. No source contents are copied into the Scan evidence folder.
 
-This plugin requires the service's `POST /scan` contract and `scan` task kind. It uses `.intent/scan/` for evidence and `scans/` for task records. Older folders are left untouched and are not read by collection or the viewer.
+This plugin requires the service's `POST /scan` contract and `scan` task kind. It uses `scans/` for local task recovery records. Explicit collection of a task without an operation log creates one using its saved source metadata; it never resubmits code or moves existing evidence.
 
 Interrupting Scan stops local waiting; the remote task may continue. If interrupted, polling fails or a report is still pending, use `collect <task-id>` to resume waiting and collection; it does not resubmit the scan. Saved reports remain available after service files expire. Supporting files remain remote. Findings are flagged, not reproduced; request reproduction or fixes separately.
 
@@ -144,7 +152,7 @@ Interrupting Scan stops local waiting; the remote task may continue. If interrup
 
 After a requested Scan or Prove workflow, the agent exports this viewer and hands
 off one local HTML link with a short outcome, scope and limitations summary.
-Prove first writes or updates `.intent/prove/<target>/PROOF.md` and `SCOPE.md`;
+Prove first writes `PROOF.md` and `SCOPE.md` in the returned `proofDir`;
 the viewer renders those documents rather than generating a proof narrative.
 If export is unavailable, the agent reports that limitation and supplies saved
 evidence instead. No sign-in or network is needed to export or read local HTML.
@@ -158,8 +166,8 @@ still readable; the viewer does not guess its remote environment. Remote job
 pages may require sign-in, and Scan supporting detail files remain remote.
 
 Reports support direct local navigation: append
-`#view=scans&scan=scan%2F<task-id>%2Fmeta.json` for a Scan, or
-`#view=proofs&proof=prove%2F<target>%2F&proofTab=report` for a proof report.
+`#view=scans&scan=logs%2F<operation-id>%2Fartifacts%2Fmeta.json` for a Scan, or
+`#view=proofs&proof=logs%2F<operation-id>%2Fartifacts%2F&proofTab=report` for a proof report.
 URL-encode any additional path characters. HTML presentation does not turn Scan
 findings into formal proof or add assurance to a proof's recorded claims.
 

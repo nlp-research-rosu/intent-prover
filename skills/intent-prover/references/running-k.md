@@ -24,7 +24,8 @@ Use structured results, not process exit alone, to decide what happened.
   An unsupported language feature blocks that scope.
 - Put submitted specs, helpers, dependencies and concrete test programs in
   `workspaceDir/inputs/`; keep reports, scripts and results outside it.
-  Keep deliverables in `.intent/prove/<target>/` under the returned `projectRoot`.
+   Keep deliverables in the operation's returned `proofDir`, under
+   `.intent/logs/<operation-id>/artifacts/` at `projectRoot`.
   The original source stays in the project.
 - Paths follow command help. `run --program` is relative to the session's project
   directory, not absolute. `projectRoot` is the detected repository root, or the
@@ -55,7 +56,7 @@ capabilities. Added theory needs [independent justification](proof-correctness.m
 - Success requires `task.status: completed`, `task.result: proved`, no `task.error`,
   and final tool exit 0 when tools ran. `toolRuns: []` can mean a reused result;
   there is no new exit code to check.
-- Read `stdout`, stderr and task fields in `proof-NNN/result.json`. Check selected
+- Read `stdout`, stderr and task fields in `evidenceDir/result.json`. Check selected
   claims, admitted claims, pending/failing nodes, reasons and path conditions.
   Residual states may be text or KAST; use a parser that handles their nesting.
 - `notProved` means obligations remain, not necessarily a counterexample. A

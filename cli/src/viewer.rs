@@ -136,8 +136,25 @@ fn collect_files(root: &Path, dir: &Path, snapshot: &mut Snapshot) -> Result<()>
         if kind.is_symlink() {
             snapshot.warnings.push(format!("Skipped symlink: {rel}"));
         } else if kind.is_dir() {
+            let parts: Vec<_> = rel.split('/').collect();
+            if rel.starts_with("prove/sessions/")
+                && !(parts.len() == 3
+                    || parts.len() == 4 && session::legacy_operation(parts[3]).is_some())
+                || rel.starts_with("logs/") && parts.len() == 3 && name == "inputs"
+            {
+                continue;
+            }
             collect_files(root, &path, snapshot)?;
         } else if kind.is_file() {
+            if rel.starts_with("prove/sessions/") {
+                let parts: Vec<_> = rel.split('/').collect();
+                if parts.len() != 5
+                    || parts[4] != "result.json"
+                    || session::legacy_operation(parts[3]).is_none()
+                {
+                    continue;
+                }
+            }
             // Only evidence/document formats are exported, not temporary or binary files.
             if !matches!(
                 path.extension().and_then(|e| e.to_str()),

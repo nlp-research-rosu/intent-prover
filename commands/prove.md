@@ -12,8 +12,8 @@ Follow the Intent Prover skill's `references/onboarding.md#check-cli-updates` on
 for this requested workflow. If setup is incomplete, finish onboarding; reuse
 saved sign-in.
 
-Then follow the Intent Prover skill's `references/prove.md`. Proof artifacts go under the
-automatically detected repository root's `.intent/prove/<target>/` directory.
+Then follow the Intent Prover skill's `references/prove.md`. Write proof reports in the
+returned `proofDir`, under the repository root's `.intent/logs/<operation-id>/artifacts/`.
 
 Before handing off, update `PROOF.md` and `SCOPE.md` with the actual outcome,
 claims, assumptions, assurance and remaining obligations. Follow the skill's

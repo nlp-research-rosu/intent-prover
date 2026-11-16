@@ -2,7 +2,7 @@
 
 A K proof connects a program's initial state to a required final state under
 explicit assumptions. Write the claims and supporting mathematics; the Intent
-Check service executes the pinned language semantics and attempts the proof.
+Prover service executes the pinned language semantics and attempts the proof.
 Reachability claims establish partial correctness, not termination.
 
 ## Knowledge map
@@ -29,10 +29,12 @@ workflow; complete onboarding only if setup is missing.
 Construction and repairs share that session and its limits. Unsupported language
 behavior is a model boundary, not a reason to author replacement semantics.
 
-Artifacts live under `.intent/prove/<target>/` at the session's `projectRoot`:
-`spec.k` states claims, `verification.k` supplies justified helpers, `SCOPE.md`
-explains the theorem, `prove.sh` records commands, and `PROOF.md` records the
-outcome and evidence. CLI-owned session files live in `.intent/prove/sessions/`.
+Prepare formal inputs in the session workspace's `inputs/`. Each operation saves
+exact submitted copies under `.intent/logs/<operation-id>/inputs/` at `projectRoot`.
+Write `SCOPE.md`, `prove.sh` and `PROOF.md` in the returned `proofDir` (`artifacts/`)
+to explain the theorem, actual commands and outcome. Session authoring scratch
+remains in `.intent/prove/sessions/`. For optional requirement associations and
+current formal files, read [Project storage](storage.md).
 
 Completion means the requested property is established for the agreed domain,
 with matching program/claim bytes, terminal evidence and explicit assumptions.

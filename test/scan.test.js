@@ -22,6 +22,7 @@ function setup({ key = true } = {}) {
 const write = (repo, rel, text) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const idOf = (text) => /\/tasks\/([0-9a-f-]{36})/.exec(text)[1];
+const reportDir = (ctx, id) => path.join(ctx.repo, ".intent", "logs", read(path.join(ctx.data, "scans", `${id}.json`)).operation_id, "artifacts");
 function cli(args, ctx, extraEnv = {}) {
   return new Promise((resolve) => {
     const child = spawn(BIN, ["scan", ...args], { cwd: ctx.cwd || ctx.repo, env: { ...ctx.env, ...extraEnv } });
@@ -80,18 +81,39 @@ test("Scan from a subdirectory submits once and saves the report at the reposito
   assert.match(result.out, /Scan finished/);
   assert.equal(read(record).report_status, "saved");
   assert.match(result.out, /Local HTML report:.*intent-prover view --output <new-file.html>/);
-  assert.ok(result.out.includes(`#view=scans&scan=${encodeURIComponent(`scan/${id}/meta.json`)}`));
+  const operation = read(record).operation_id;
+  assert.match(operation, /^[a-z0-9]{6}$/);
+  assert.ok(result.out.includes(`#view=scans&scan=${encodeURIComponent(`logs/${operation}/artifacts/meta.json`)}`));
   const collected = await cli(["collect", id], ctx);
   assert.equal(collected.code, 0, collected.err);
   assert.match(collected.out, /Scan finished/);
   assert.match(collected.out, /Local HTML report:/);
   assert.equal(read(record).report_status, "saved");
-  const reportDir = path.join(ctx.repo, ".intent", "scan", id);
-  assert.ok(read(path.join(reportDir, "report.json")).coverage);
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "saved");
+  const artifacts = reportDir(ctx, id);
+  assert.ok(read(path.join(artifacts, "report.json")).coverage);
+  assert.equal(read(path.join(artifacts, "meta.json")).report.status, "saved");
+  const request = read(path.join(artifacts, "..", "request.json"));
+  assert.equal(request.operation, "scan");
+  assert.equal(request.upload_sha256, read(path.join(artifacts, "meta.json")).source.snapshot_sha256);
+  assert.deepEqual(request.inputs, []);
   assert.equal(fs.existsSync(path.join(ctx.cwd, ".intent")), false);
   assert.equal(fp.scanUploads().length, 1);
   assert.match((await cli(["collect"], ctx)).out, /No uncollected scans/);
+
+  // Recovery of a pre-log record leaves its existing evidence untouched.
+  const old = path.join(ctx.repo, ".intent", "scan", id);
+  fs.mkdirSync(old, { recursive: true });
+  fs.copyFileSync(path.join(artifacts, "report.json"), path.join(old, "report.json"));
+  const oldBytes = fs.readFileSync(path.join(old, "report.json"));
+  const legacy = read(record);
+  delete legacy.operation_id;
+  fs.writeFileSync(record, JSON.stringify(legacy));
+  assert.equal((await cli(["collect", id], ctx)).code, 0);
+  assert.notEqual(read(record).operation_id, operation);
+  assert.equal(read(path.join(reportDir(ctx, id), "..", "request.json")).recovered_task, id);
+  assert.deepEqual(fs.readFileSync(path.join(old, "report.json")), oldBytes);
+  assert.ok(fs.existsSync(path.join(artifacts, "report.json")));
+  assert.equal(fp.scanUploads().length, 1);
 });
 
 test("corrupt reports are rejected without replacing a saved report", async () => {
@@ -99,27 +121,27 @@ test("corrupt reports are rejected without replacing a saved report", async () =
   fp.state.corruptArtifact = true;
   const result = await cli([], ctx);
   const id = idOf(result.out);
-  const reportDir = path.join(ctx.repo, ".intent", "scan", id);
-  const reportFile = path.join(reportDir, "report.json");
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "pending");
-  assert.equal(read(path.join(reportDir, "meta.json")).report.reason, "REPORT_HASH_MISMATCH");
+  const artifacts = reportDir(ctx, id);
+  const reportFile = path.join(artifacts, "report.json");
+  assert.equal(read(path.join(artifacts, "meta.json")).report.status, "pending");
+  assert.equal(read(path.join(artifacts, "meta.json")).report.reason, "REPORT_HASH_MISMATCH");
   assert.equal(fs.existsSync(reportFile), false);
 
   fp.state.corruptArtifact = false;
   const recovered = await cli(["collect", id], ctx);
   assert.equal(recovered.code, 0, recovered.err);
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "saved");
+  assert.equal(read(path.join(artifacts, "meta.json")).report.status, "saved");
   const saved = fs.readFileSync(reportFile);
 
   // A changed artifact reference forces a download instead of reusing the saved copy.
   fp.state.scan.summary = {
     counts: {}, cards: [], oneLiners: [],
-    report: { ...read(path.join(reportDir, "meta.json")).task.report, sha256: "0".repeat(64) },
+    report: { ...read(path.join(artifacts, "meta.json")).task.report, sha256: "0".repeat(64) },
   };
   fp.state.corruptArtifact = true;
   await cli(["collect", id], ctx);
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "pending");
-  assert.equal(read(path.join(reportDir, "meta.json")).report.reason, "REPORT_HASH_MISMATCH");
+  assert.equal(read(path.join(artifacts, "meta.json")).report.status, "pending");
+  assert.equal(read(path.join(artifacts, "meta.json")).report.reason, "REPORT_HASH_MISMATCH");
   assert.deepEqual(fs.readFileSync(reportFile), saved);
   assert.equal(fp.scanUploads().length, 1);
 });

@@ -32,7 +32,9 @@ Use `scan collect <task-id>` to resume polling and save evidence without
 resubmitting source. `scan collect` handles outstanding scans in this project.
 Ordinary messages do not resume scans or deliver results.
 
-Reports live in `.intent/scan/<task-id>/` at the repository root. Preserve
+Reports live in `.intent/logs/<operation-id>/artifacts/` at the repository root.
+`request.json` and `result.json` beside that folder record the operation and
+source hashes. The backend task ID is unchanged. Preserve
 existing evidence. Commit project knowledge with source; do not blanket-ignore
 `.intent/`.
 
