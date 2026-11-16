@@ -121,7 +121,8 @@ impl Api {
     }
 
     pub fn prepare_run(&self, root: &Path, args: RunArgs) -> Result<Upload> {
-        let semantics = crate::session::load(args.session)?.semantics;
+        let proof_session = crate::session::load(args.session)?;
+        let semantics = proof_session.semantics;
         crate::semantics::require(&semantics, args.semantics.as_deref())?;
         let (program, name) = inputs::resolve(root, &args.program)?;
         let file_name = Path::new(&name)
@@ -141,7 +142,14 @@ impl Api {
                 mime: None,
                 bytes: bytes.clone(),
             },
-            inputs: vec![(file_name, bytes)],
+            inputs: vec![(
+                if proof_session.log_id.is_some() {
+                    name
+                } else {
+                    file_name
+                },
+                bytes,
+            )],
             requirements: Vec::new(),
             specification_id: None,
         })
@@ -173,17 +181,23 @@ impl Api {
                 .context("Invalid upload controls")?
                 .push(json!(value));
         }
-        crate::storage::operation(
-            &session.project_root,
-            json!({
-                "operation":operation,"session_id":session.session_id,"semantics":session.semantics,
-                "attempt":match operation { "run" => session.runs_used + 1, "validate" => session.validations_used + 1, _ => session.attempts_used + 1 },
-                "api_url":self.base,"requirements":upload.requirements,"spec_id":upload.specification_id,
-                "upload_sha256":crate::storage::hash(&upload.file.bytes),"controls":controls,
-                "requirement_binding":{"version":1,"kind":"declared_association_not_uploaded","records":upload.requirements}
-            }),
-            &upload.inputs,
-        )
+        let request = json!({
+            "operation":operation,"session_id":session.session_id,"semantics":session.semantics,
+            "attempt":match operation { "run" => session.runs_used + 1, "validate" => session.validations_used + 1, _ => session.attempts_used + 1 },
+            "api_url":self.base,"requirements":upload.requirements,"spec_id":upload.specification_id,
+            "upload_sha256":crate::storage::hash(&upload.file.bytes),"controls":controls,
+            "requirement_binding":{"version":1,"kind":"declared_association_not_uploaded","records":upload.requirements}
+        });
+        if session.log_id.is_some() {
+            crate::storage::attempt(
+                &session.project_root,
+                &crate::session::workspace(session),
+                request,
+                &upload.inputs,
+            )
+        } else {
+            crate::storage::operation(&session.project_root, request, &upload.inputs)
+        }
     }
 
     pub fn record_submission(&self, accepted: &Value, evidence: &Path) -> Result<()> {
@@ -274,7 +288,7 @@ impl Api {
                 runs.is_empty() && !task["result"].is_null()
                     || runs.last().is_some_and(|run| run["exitCode"] == 0)
             });
-        if evidence.parent() == Some(session.project_root.join(".intent/logs").as_path()) {
+        if evidence.join("request.json").is_file() {
             crate::storage::finish_properties(&session.project_root, &evidence, successful)?;
         }
         Ok(task)

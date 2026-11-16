@@ -152,7 +152,8 @@ fn collect_files(root: &Path, dir: &Path, snapshot: &mut Snapshot) -> Result<()>
             let current = rel.starts_with("source/")
                 && (rel.contains("/specs/") || rel.ends_with("/index.json"));
             let requirement = rel.starts_with("source/") && rel.ends_with("/requirements.json");
-            let run = rel.split('/').count() == 3
+            let parts: Vec<_> = rel.split('/').collect();
+            let run = (parts.len() == 3 || parts.len() == 5 && parts[2] == "attempts")
                 && rel.starts_with("logs/")
                 && matches!(name.to_str(), Some("request.json" | "result.json"));
             let artifact = rel.starts_with("logs/") && rel.split('/').nth(2) == Some("artifacts");
@@ -277,14 +278,12 @@ fn snapshot(root: &Path, name: &str, data_dirs: &[PathBuf]) -> Result<Snapshot> 
             }
             let mut inputs_match = true;
             for input in request["inputs"].as_array().into_iter().flatten() {
-                let Some(relative) = input["path"].as_str() else {
-                    inputs_match = false;
-                    continue;
-                };
-                let file = intent.join(relative);
-                if crate::storage::safe_parent(root, &file).is_err()
-                    || fs::read(file).ok().map(crate::storage::hash).as_deref()
-                        != input["sha256"].as_str()
+                if crate::storage::input_path(root, input)
+                    .ok()
+                    .and_then(|file| fs::read(file).ok())
+                    .map(crate::storage::hash)
+                    .as_deref()
+                    != input["sha256"].as_str()
                 {
                     inputs_match = false;
                 }
@@ -338,8 +337,16 @@ fn snapshot(root: &Path, name: &str, data_dirs: &[PathBuf]) -> Result<Snapshot> 
                     let key = format!("source/{owner}/index.json#{id}");
                     let mut freshness = "unknown";
                     if let Some(run) = selection.last_run {
-                        let request_path = format!("logs/{run}/request.json");
-                        let result_path = format!("logs/{run}/result.json");
+                        let request_path = snapshot
+                            .files
+                            .keys()
+                            .find(|path| {
+                                path.starts_with("logs/")
+                                    && path.ends_with(&format!("/{run}/request.json"))
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| format!("logs/{run}/request.json"));
+                        let result_path = request_path.replace("request.json", "result.json");
                         let request = snapshot
                             .files
                             .get(&request_path)

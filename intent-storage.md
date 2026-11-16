@@ -17,7 +17,14 @@ Use the `requirements` CLI to add or update structured requirements from JSON. I
         k7m2qx/
           discount.k
   logs/
-    <run-id>/
+    <log-id>/
+      inputs/
+      artifacts/
+      attempts/
+        <operation-id>/
+          request.json
+          result.json
+    <scan-id>/
       request.json
       result.json
       inputs/
@@ -28,12 +35,12 @@ One-file requirements live in `source/<source-path>/requirements.json`; cross-fi
 
 An index contains `schema_version: 1` and a `properties` object keyed by requirement ID. Each entry contains only `specs` (paths relative to `.intent`, such as `source/src/shop.py/specs/k7m2qx/discount.k`) and `last_run` (a local operation ID, or null). An empty specs list is valid. Multiple properties can share formal files and operations. Do not create competing ownership entries.
 
-`specs/` holds actual current working formal files, not symlinks. `logs/` retains exact submitted inputs, returned artifacts, outcomes, hashes, scope and assumptions for scan, execution and proof operations. Proof reports, scope records and reproducible commands belong in the operation's `artifacts/`; frozen inputs belong in `inputs/`. Authoring scratch under `prove/sessions/` is not evidence. A run reference is not a claim that its property was proved.
+`specs/` holds actual current working formal files, not symlinks. Each new proof session starts directly in `logs/<log-id>/`, with editable formal inputs in `inputs/` and reports, scope records and reproduction commands in `artifacts/`. Retries reuse the same workspace, and files remain there at any stopping point without finalization, moving or cleanup. Each operation retains request/result metadata, submitted hashes, scope and assumptions in `attempts/<operation-id>/`. Inputs are referenced in place, not copied per attempt; earlier input versions are not retained. Concrete runs likewise reference their selected program in place. Scan retains its compressed submitted snapshot in its own operation's `inputs/`. A run reference is not a claim that its property was proved.
 
-Explicit proof `--requirement <id>` associations bind the submitted formal files to those properties. By default, an associated attempt allocates an independent specification bundle under its first property's owning source. Use `--spec-id <id>` to update an existing bundle or share it with another property; matching filenames alone never select a bundle. Files retain their upload-relative paths within `specs/<id>/`, including helpers and relative imports. Applicable formal files are copied after successful completion; failed attempts may update last_run without replacing specifications. Partial output never deletes an absent specification. A late operation cannot replace changed source, requirements, working specifications or a newer selection. Read freshness from the referenced operation's exact input hashes; edits can make evidence stale without deleting current files.
+Explicit proof `--requirement <id>` associations bind the submitted formal files to those properties. By default, an associated attempt allocates an independent specification bundle under its first property's owning source. Use `--spec-id <id>` to update an existing bundle or share it with another property; matching filenames alone never select a bundle. Files retain their upload-relative paths within `specs/<id>/`, including helpers and relative imports. Applicable formal files are copied to current per-source specifications after successful completion; failed attempts may update last_run without replacing specifications. Partial output never deletes an absent specification. A late operation cannot replace changed source, requirements, working specifications, submitted input files or a newer selection. Read freshness from the referenced operation's exact input hashes; edits can make evidence stale without deleting current files.
 
-Agents may maintain `REQUIREMENTS.md` and read the whole folder. Use the requirements CLI for structured requirement mutations. Keep current formal files and their index links consistent; do not edit historical results or frozen inputs. Merge source, properties and current formal files together; use operation logs to resolve conflicts.
+Agents may maintain `REQUIREMENTS.md` and read the whole folder. Use the requirements CLI for structured requirement mutations. Keep current formal files and their index links consistent; do not edit historical request/result metadata or Scan snapshots. Session inputs remain editable between attempts. Merge source, properties and current formal files together; use operation logs to resolve conflicts.
 
 Requirement mutations validate affected documents and indexes before writing. Property freshness compares current files with the formal versions in the referenced operation's submitted-input manifest, independently of success or failure. Different submitted contents are stale; retained specs absent from that submission have unknown freshness for that attempt.
 
-`.sent.log` is an upload audit without contents. It and `.storage.lock` are ignored by Git. `.ignore` excludes generated evidence from ordinary searches. Durable requirements, current specifications and evidence may be committed. Viewer/export excludes private conversations, authoring scratch and frozen input copies.
+`.sent.log` is an upload audit without contents. It and `.storage.lock` are ignored by Git. `.ignore` excludes generated evidence from ordinary searches. Requirements, current specifications and session log folders may be committed. Viewer/export excludes private conversations and input files. Existing sessions/evidence remain in their original locations; no automatic migration or deletion occurs.

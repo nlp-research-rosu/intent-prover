@@ -25,7 +25,7 @@ Use structured results, not process exit alone, to decide what happened.
 - Put submitted specs, helpers, dependencies and concrete test programs in
   `workspaceDir/inputs/`; keep reports, scripts and results outside it.
    Keep deliverables in the operation's returned `proofDir`, under
-   `.intent/logs/<operation-id>/artifacts/` at `projectRoot`.
+    `.intent/logs/<log-id>/artifacts/` at `projectRoot`.
   The original source stays in the project.
 - Paths follow command help. `run --program` is relative to the session's project
   directory, not absolute. `projectRoot` is the detected repository root, or the

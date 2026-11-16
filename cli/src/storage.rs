@@ -83,7 +83,7 @@ pub fn lock(root: &Path) -> Result<fs::File> {
 }
 
 /// Freeze selected inputs and their local associations before a remote submission.
-pub fn operation(root: &Path, mut request: Value, files: &[(String, Vec<u8>)]) -> Result<PathBuf> {
+pub fn operation(root: &Path, request: Value, files: &[(String, Vec<u8>)]) -> Result<PathBuf> {
     let _lock = lock(root)?;
     let id = new_id(root)?;
     let evidence = root.join(".intent/logs").join(&id);
@@ -92,6 +92,66 @@ pub fn operation(root: &Path, mut request: Value, files: &[(String, Vec<u8>)]) -
     fs::create_dir(&evidence)?;
     fs::create_dir(evidence.join("inputs"))?;
     fs::create_dir(evidence.join("artifacts"))?;
+    let mut manifest = Vec::new();
+    for (name, bytes) in files {
+        crate::requirements::relative_path(name)?;
+        let file = evidence.join("inputs").join(name);
+        safe_parent(root, &file)?;
+        fs::create_dir_all(file.parent().context("Missing input parent")?)?;
+        fs::write(&file, bytes)?;
+        manifest.push(json!({"path":format!("logs/{id}/inputs/{name}"),"sha256":hash(bytes)}));
+    }
+    record_operation(root, &evidence, request, files, manifest)?;
+    Ok(evidence)
+}
+
+/// Record an attempt against the session's editable files without duplicating them.
+pub fn attempt(
+    root: &Path,
+    workspace: &Path,
+    mut request: Value,
+    files: &[(String, Vec<u8>)],
+) -> Result<PathBuf> {
+    let _lock = lock(root)?;
+    let id = new_id(root)?;
+    let evidence = workspace.join("attempts").join(id);
+    safe_parent(root, &evidence)?;
+    fs::create_dir_all(evidence.parent().context("Missing attempts directory")?)?;
+    fs::create_dir(&evidence)?;
+    safe_parent(root, &workspace.join("artifacts"))?;
+    fs::create_dir_all(workspace.join("artifacts"))?;
+    request["workspace"] = json!(
+        workspace
+            .strip_prefix(root.join(".intent"))?
+            .to_string_lossy()
+            .replace('\\', "/")
+    );
+    let mut manifest = Vec::new();
+    for (name, bytes) in files {
+        let input = if request["operation"] == "run" {
+            if let Some(relative) = name.strip_prefix(".intent/") {
+                json!({"name":name,"path":relative,"sha256":hash(bytes)})
+            } else {
+                json!({"name":name,"root":"project","path":name,"sha256":hash(bytes)})
+            }
+        } else {
+            crate::requirements::relative_path(name)?;
+            json!({"name":name,"path":format!("{}/inputs/{name}", request["workspace"].as_str().context("Missing workspace")?),"sha256":hash(bytes)})
+        };
+        input_path(root, &input)?;
+        manifest.push(input);
+    }
+    record_operation(root, &evidence, request, files, manifest)?;
+    Ok(evidence)
+}
+
+fn record_operation(
+    root: &Path,
+    evidence: &Path,
+    mut request: Value,
+    files: &[(String, Vec<u8>)],
+    manifest: Vec<Value>,
+) -> Result<()> {
     let ids = request["requirements"]
         .as_array()
         .cloned()
@@ -103,25 +163,70 @@ pub fn operation(root: &Path, mut request: Value, files: &[(String, Vec<u8>)]) -
         .as_object_mut()
         .context("Invalid operation request")?
         .remove("spec_id");
-    let mut manifest = Vec::new();
-    for (name, bytes) in files {
-        crate::requirements::relative_path(name)?;
-        let file = evidence.join("inputs").join(name);
-        safe_parent(root, &file)?;
-        fs::create_dir_all(file.parent().context("Missing input parent")?)?;
-        fs::write(&file, bytes)?;
-        manifest.push(json!({"path":format!("logs/{id}/inputs/{name}"),"sha256":hash(bytes)}));
-    }
     request["version"] = json!(1);
-    request["operation_id"] = json!(id);
+    request["operation_id"] = json!(
+        evidence
+            .file_name()
+            .context("Missing operation ID")?
+            .to_string_lossy()
+    );
     request["inputs"] = json!(manifest);
     request["submitted_at"] = json!(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_millis()
     );
-    crate::api::write_json(&evidence, "request.json", &request)?;
-    Ok(evidence)
+    crate::api::write_json(evidence, "request.json", &request)
+}
+
+/// Resolve an input manifest entry in place, within its recorded root.
+pub fn input_path(root: &Path, input: &Value) -> Result<PathBuf> {
+    let relative = input["path"]
+        .as_str()
+        .context("Missing submitted input path")?;
+    crate::requirements::relative_path(relative)?;
+    if input["root"] == "project" {
+        let file = root.join(relative).canonicalize()?;
+        ensure!(
+            file.starts_with(root),
+            "Submitted input is outside the project"
+        );
+        Ok(file)
+    } else {
+        let file = root.join(".intent").join(relative);
+        safe_parent(root, &file)?;
+        Ok(file)
+    }
+}
+
+/// Enumerate reserved log entries and attempts within session log folders.
+fn operations(root: &Path) -> Result<Vec<PathBuf>> {
+    let logs = root.join(".intent/logs");
+    if !logs.exists() {
+        return Ok(Vec::new());
+    }
+    safe_parent(root, &logs)?;
+    let mut out = Vec::new();
+    for entry in fs::read_dir(logs)? {
+        let entry = entry?;
+        let dir = entry.path();
+        out.push(dir.clone());
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let attempts = dir.join("attempts");
+        safe_parent(root, &attempts)?;
+        if attempts.exists() {
+            for entry in fs::read_dir(attempts)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    out.push(entry.path());
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
 }
 
 /// Allocate a project-local identity; callers hold the storage lock until it is recorded.
@@ -137,23 +242,24 @@ pub fn new_id(root: &Path) -> Result<String> {
         }
     }
     used.extend(specifications(root)?.into_keys());
-    let logs = root.join(".intent/logs");
-    if logs.exists() {
-        safe_parent(root, &logs)?;
-        for entry in fs::read_dir(logs)? {
-            let entry = entry?;
-            used.insert(entry.file_name().to_string_lossy().into_owned());
-            let request = entry.path().join("request.json");
-            safe_parent(root, &request)?;
-            if request.is_file() {
-                let request: Value = serde_json::from_slice(&fs::read(request)?)?;
-                if let Some(id) = request["specification"]["id"].as_str() {
+    for operation in operations(root)? {
+        used.insert(
+            operation
+                .file_name()
+                .context("Missing log ID")?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let request = operation.join("request.json");
+        safe_parent(root, &request)?;
+        if request.is_file() {
+            let request: Value = serde_json::from_slice(&fs::read(request)?)?;
+            if let Some(id) = request["specification"]["id"].as_str() {
+                used.insert(id.into());
+            }
+            for requirement in request["requirements"].as_array().into_iter().flatten() {
+                if let Some(id) = requirement["id"].as_str() {
                     used.insert(id.into());
-                }
-                for requirement in request["requirements"].as_array().into_iter().flatten() {
-                    if let Some(id) = requirement["id"].as_str() {
-                        used.insert(id.into());
-                    }
                 }
             }
         }
@@ -509,7 +615,7 @@ pub fn submitted_specs(request: &Value, property: &Value, run: &str) -> Result<V
             let frozen = format!("logs/{run}/inputs/{name}");
             let input = inputs
                 .iter()
-                .find(|input| input["path"] == frozen)
+                .find(|input| input["name"] == name || input["path"] == frozen)
                 .context("Formal input is absent from the submission manifest")?;
             let sha256 = input["sha256"]
                 .as_str()
@@ -584,13 +690,9 @@ pub fn finish_properties(root: &Path, evidence: &Path, successful: bool) -> Resu
         });
         let inputs_match = request["inputs"].as_array().is_some_and(|inputs| {
             inputs.iter().all(|input| {
-                input["path"]
-                    .as_str()
-                    .and_then(|path| {
-                        let file = root.join(".intent").join(path);
-                        safe_parent(root, &file).ok()?;
-                        fs::read(file).ok()
-                    })
+                input_path(root, input)
+                    .ok()
+                    .and_then(|path| fs::read(path).ok())
                     .map(hash)
                     .as_deref()
                     == input["sha256"].as_str()
@@ -603,11 +705,22 @@ pub fn finish_properties(root: &Path, evidence: &Path, successful: bool) -> Resu
             for output in property["outputs"].as_array().into_iter().flatten() {
                 let name = output["input"].as_str().context("Missing formal input")?;
                 crate::requirements::relative_path(name)?;
-                let bytes = fs::read(evidence.join("inputs").join(name))?;
-                let artifact = evidence.join("artifacts").join(name);
-                safe_parent(root, &artifact)?;
-                fs::create_dir_all(artifact.parent().context("Missing artifact parent")?)?;
-                fs::write(artifact, &bytes)?;
+                let input = request["inputs"]
+                    .as_array()
+                    .context("Missing submitted inputs")?
+                    .iter()
+                    .find(|input| {
+                        input["name"] == name
+                            || input["path"] == format!("logs/{run}/inputs/{name}")
+                    })
+                    .context("Formal input is absent from the submission manifest")?;
+                let bytes = fs::read(input_path(root, input)?)?;
+                if request["workspace"].is_null() {
+                    let artifact = evidence.join("artifacts").join(name);
+                    safe_parent(root, &artifact)?;
+                    fs::create_dir_all(artifact.parent().context("Missing artifact parent")?)?;
+                    fs::write(artifact, &bytes)?;
+                }
                 let path = output["path"]
                     .as_str()
                     .context("Missing current specification path")?;

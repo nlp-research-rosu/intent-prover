@@ -56,8 +56,9 @@ the global CLI to export the existing local viewer:
     intent-prover view --output <new-report.html>
 
 Run from the repository root (or use `--project <root>` before `view`). Choose a
-new filename under the operation's `.intent/logs/<operation-id>/artifacts/`
-directory; never delete an older report to reuse a name.
+new filename under Scan's `.intent/logs/<operation-id>/artifacts/` directory or
+Prove's returned `proofDir` (the session log's `artifacts/`); never delete an
+older report to reuse a name.
 Prove must first update its readable `PROOF.md` and `SCOPE.md`, including narrower
 or unsuccessful outcomes. The viewer displays those documents; it does not write them.
 
@@ -66,7 +67,7 @@ local HTML link first**, with a brief outcome, checked scope and important
 limitations—not a list of JSON/Markdown files or a remote-console login link.
 Open the relevant section by appending a hash to that link (URL-encode paths):
 `#view=scans&scan=logs%2F<operation-id>%2Fartifacts%2Fmeta.json` or
-`#view=proofs&proof=logs%2F<operation-id>%2Fartifacts%2F&proofTab=report`.
+`#view=proofs&proof=logs%2F<log-id>%2Fartifacts%2F&proofTab=report`.
 
 The HTML reads saved evidence without network access or sign-in. It includes
 optional **Open job in Prover** links; remote access may require login, and some

@@ -154,8 +154,10 @@ pub fn task(command: TaskCommand) -> CommandResult {
         } => {
             let proof_session = session::load(session_id)?;
             let logs = proof_session.project_root.join(".intent/logs");
+            let workspace = session::workspace(&proof_session);
+            let attempts = workspace.join("attempts");
             let id = id.to_string();
-            for root in [&logs, &session::workspace(&proof_session)] {
+            for root in [&logs, &attempts, &workspace] {
                 crate::storage::safe_parent(&proof_session.project_root, root)?;
                 let entries = match std::fs::read_dir(root) {
                     Ok(entries) => entries,
@@ -167,7 +169,7 @@ pub fn task(command: TaskCommand) -> CommandResult {
                     if !entry.file_type()?.is_dir() {
                         continue;
                     }
-                    let operation = if root == &logs {
+                    let operation = if root != &workspace {
                         let request = entry.path().join("request.json");
                         crate::storage::safe_parent(&proof_session.project_root, &request)?;
                         let Some(manifest) = std::fs::read(&request)
@@ -258,11 +260,16 @@ fn finish(
         && task["error"].is_null();
     let mut response = json!({"task": task, "sessionId": proof_session.session_id,
         "budget": budget, "evidenceDir": evidence});
-    if evidence.parent() == Some(proof_session.project_root.join(".intent/logs").as_path()) {
+    if evidence.join("request.json").is_file() {
         let manifest: Value =
             serde_json::from_slice(&std::fs::read(evidence.join("request.json"))?)?;
         if manifest["operation"] == "prove" {
-            response["proofDir"] = json!(evidence.join("artifacts"));
+            let workspace = match manifest["workspace"].as_str() {
+                Some(relative) => proof_session.project_root.join(".intent").join(relative),
+                None => evidence.clone(),
+            };
+            crate::storage::safe_parent(&proof_session.project_root, &workspace)?;
+            response["proofDir"] = json!(workspace.join("artifacts"));
         }
     }
     if exit.is_none() {

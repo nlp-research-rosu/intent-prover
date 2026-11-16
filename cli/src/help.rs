@@ -105,8 +105,9 @@ or validate to resubmit. Task help explains recovery.
 Session counters live in sessions/<ID>/session.json beside config.toml; shared
 language sources live in semantics/<id>/<commit>/ there too.
 The same XDG_CONFIG_HOME / APPDATA / home-directory rules apply to all three.
-Authoring scratch lives in <project>/.intent/prove/sessions/<ID>/.
-Durable inputs, results and artifacts live in <project>/.intent/logs/<operation-id>/.
+Each new session works directly in <project>/.intent/logs/<log-id>/.
+Editable inputs and reports stay there; attempts/<operation-id>/ holds request
+and result metadata. Inputs are not copied for each attempt or at completion.
 Inside a repository, <project> is always its root, not the working directory.
 Existing project-local descriptors are left untouched and are not imported.
 
@@ -182,7 +183,7 @@ Run, validation, and proof limits are independent. At the limit, the next run
 is refused with local status exhausted and exit 20; the last run's backend
 result and exit code are not overwritten.
 task.result is success or error; the configuration is in saved stdout.
-Evidence is stored under .intent/logs/<operation-id>/result.json, with inline
+Evidence is stored under <workspaceDir>/attempts/<operation-id>/result.json, with inline
 stdout and stderr. The snapshot is updated from acceptance to completion.
 Configuration help explains timeout and cancellation behavior."#;
 
@@ -190,13 +191,17 @@ pub const SESSION: &str = r#"Start detects the repository root automatically fro
 or --project directory. Worktrees and submodules use their own repository root.
 Outside a repository, that directory is the project root.
 Start creates a fresh session ID with zero operation counters.
-The global session.json records only its ID, projectRoot, semantics identity,
+The global session.json records its ID, projectRoot, logId, semantics identity,
 attemptsUsed, validationsUsed, and runsUsed. Settings remain in config.toml.
-Each operation has a distinct six-character local ID under .intent/logs/.
+The session's workspaceDir is .intent/logs/<logId>/; log and operation IDs use
+six lowercase letters/digits. Each operation records request/result metadata
+under workspaceDir/attempts/<operation-id>/.
 Each accepted operation increments only its own counter.
 
 Create inputs/ inside the returned workspaceDir and write session input files
-there (spec.k, verification.k, and concrete programs). Keep results outside
+there (spec.k, verification.k, and concrete programs). Reuse this same folder
+across repairs and retries. Files remain there at any stopping point, without
+finalization, moving or cleanup. Keep results outside
 inputs/. Pass --session <ID> to run, validate, and prove.
 Proof paths resolve within workspaceDir and must stay inside inputs/.
 Uploads omit the inputs/ prefix and preserve internal paths and file contents.
@@ -204,7 +209,8 @@ Run program paths
 resolve within projectRoot. Show returns the stored fields plus workspaceDir.
 Remaining attempts are the configured maximum minus the used counter, floored
 at zero. You can run several commands at the same time with the same session ID.
-They share the session's attempt limits, and each saves its own results.
+They share the session's attempt limits and editable workspace; each saves its
+own request/result metadata and submitted-input hashes, not input copies.
 The client submits one task at a time, but it can wait for several tasks at once.
 Finish writing input files before starting a command. Do not edit those files
 while the client reads or uploads them. Use different folders inside inputs/
@@ -254,7 +260,7 @@ Parallel proofs:
 
 const EVIDENCE: &str = r#"Evidence:
   The CLI automatically polls the service while the command runs. The evidenceDir
-  contains only result.json: it starts with the accepted task, then each poll
+  contains request.json and result.json. The latter starts with the accepted task; each poll
   replaces it with the latest task response. Earlier snapshots are not kept.
   At completion it adds inline stdout and stderr. The file holds the last
   server response under task, including its ID, semantics, status, and result.
@@ -262,7 +268,8 @@ const EVIDENCE: &str = r#"Evidence:
   and afterward. An empty object means no snapshot is available. Fetch failures
   appear as metricsError, retaining the last fetched metrics without changing
   the task outcome. Remote files expire after 48 hours by default; these local
-  snapshots remain in the session workspace. Read
+  snapshots remain in the session's log folder. Input files are editable and
+  earlier versions are not retained. The manifest records the submitted hashes. Read
   saved stdout and stderr together with the task result when diagnosing a
   proof. The proof result has no residual field.
   Backend task.status describes the job lifecycle:
@@ -309,7 +316,7 @@ Validation results:
   task.result (valid or invalid), task.toolRuns, and task.error for evidence.
   Neither compilation nor a valid result establishes proof or non-vacuity.
   Accepted submissions increment validationsUsed and are retained under
-  .intent/logs/<operation-id>/, including failed tasks. The response includes
+  <workspaceDir>/attempts/<operation-id>/, including failed tasks. The response includes
   budget (used, limit, remaining) and evidenceDir. At the limit, the next
   validation is refused with local status exhausted and exit 20; the last
   validation's backend result and exit code are not overwritten.\n\n{EVIDENCE}"
@@ -322,8 +329,9 @@ pub fn prove() -> String {
 Proof results and attempts:
   Each server-accepted proof consumes one attempt, including interruption,
   timeout, replay, and audit mutation. Evidence is stored under
-  .intent/logs/<operation-id>/. The response includes the backend task unchanged,
-  sessionId, budget (used, limit, remaining), evidenceDir and proofDir (artifacts/).
+  <workspaceDir>/attempts/<operation-id>/. The response includes the backend task unchanged,
+  sessionId, budget (used, limit, remaining), evidenceDir and proofDir
+  (<workspaceDir>/artifacts/), shared across attempts.
   --requirement associates local properties with submitted formal inputs.
   --spec-id explicitly selects an existing bundle; otherwise a new bundle is used.
   Associations stay local and do not establish proof coverage or freshness.
@@ -368,7 +376,7 @@ proof-operation reportUrl records. It never guesses missing historical URLs
 from current configuration. Remote jobs may require sign-in; local viewing does not.
 
 Append #view=scans&scan=logs%2F<OPERATION_ID>%2Fartifacts%2Fmeta.json for a Scan, or
-#view=proofs&proof=logs%2F<OPERATION_ID>%2Fartifacts%2F&proofTab=report for a proof report.
+#view=proofs&proof=logs%2F<LOG_ID>%2Fartifacts%2F&proofTab=report for a proof report.
 URL-encode paths in these fragments. Hash links select local content only.
 
 The name comes from the origin repository name, falling back to the root folder.

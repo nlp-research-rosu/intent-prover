@@ -114,7 +114,7 @@ class CancellationTests(unittest.TestCase):
                 self.assertEqual(process.returncode, 1, stdout + stderr)
                 result = json.loads(stdout)
                 self.assertIn("Interrupted", result.get("message", "") + stderr)
-                results = list((root / ".intent/logs").glob("*/result.json"))
+                results = list((workspace / "attempts").glob("*/result.json"))
                 self.assertEqual(len(results), 1)
                 snapshot = json.loads(results[0].read_text())
                 self.assertEqual(snapshot["task"]["status"], "cancelled")

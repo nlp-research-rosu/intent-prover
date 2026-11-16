@@ -16,7 +16,7 @@ Before starting a remote Scan or Prove operation, the agent explains what will b
 
 Scan masks obvious secrets locally and never sends files such as `.env*`, private keys or credential files. Redaction is not a substitute for reviewing the requested scope. Scan upload metadata is listed in `.intent/.sent.log`; it does not contain source contents.
 
-Project knowledge and evidence under `.intent/` are meant to be committed with source. Transient `.sent.log`, `.storage.lock` and proof-session scratch stay ignored; do not blanket-ignore `.intent/`.
+Project knowledge and evidence under `.intent/` are meant to be committed with source. Transient `.sent.log` and `.storage.lock` stay ignored; do not blanket-ignore `.intent/`.
 
 ## Install (Claude Code)
 
@@ -61,7 +61,7 @@ Endpoint settings are shared in `config.toml` beside credentials: `server_url` s
 
 The single `intent-prover` skill contains onboarding, Scan and Prove guides, with detailed references loaded only as needed. `/intent:prove [what to prove]` follows its Prove guide, invoking the global CLI directly. Scan is not a prerequisite. K proofs establish partial correctness: if the program terminates and the precondition holds, the postcondition holds. Writing or auditing new language semantics is not included.
 
-Proof operations retain exact submitted inputs and results in `.intent/logs/<operation-id>/`; commit them. The returned `proofDir` points to `artifacts/` for `PROOF.md`, `SCOPE.md` and reproduction commands. `.intent/prove/sessions/` remains local authoring scratch. Commands detect the repository root even from subdirectories; outside Git, they use the project directory. Explicit CLI operations collect their results, with task recovery documented in `intent-prover task --help`.
+Each new proof session starts directly in `.intent/logs/<log-id>/`. Author inputs in its `inputs/`, reuse them across retries, and keep `PROOF.md`, `SCOPE.md` and reproduction commands in the returned `proofDir` (`artifacts/`). Files stay in that log folder at any stopping point; no finalization or copying into logs is needed. Each attempt retains request/result metadata and submitted hashes in `attempts/<operation-id>/`, not historical input copies. Commands detect the repository root even from subdirectories; outside Git, they use the project directory. Explicit CLI operations collect their results, with task recovery documented in `intent-prover task --help`.
 
 ## Project storage
 
@@ -69,7 +69,7 @@ Proof operations retain exact submitted inputs and results in `.intent/logs/<ope
 
 Use the local `requirements` commands to manage those records. Proof and validation commands optionally accept `--requirement <id>` and `--spec-id <id>`; neither is required for ordinary Scan/Prove use. These associations stay local and do not certify a property. Successful associated formal inputs can become current spec copies; failed or stale attempts do not replace them.
 
-Every new operation uses `.intent/logs/<operation-id>/{request.json,result.json,inputs/,artifacts/}`. Local requirement, bundle and operation IDs use six lowercase letters/digits with project-local collision checks. Server task IDs and proof-session IDs are unchanged. Existing evidence remains in place, without automatic migration. See the skill's [storage reference](skills/intent-prover/references/storage.md) for ownership, scope and submitted-version rules.
+Scan uses `.intent/logs/<operation-id>/{request.json,result.json,inputs/,artifacts/}`. Proof sessions keep one `.intent/logs/<log-id>/{inputs/,artifacts/,attempts/}` workspace, with request/result records per attempt. Local requirement, bundle, log and operation IDs use six lowercase letters/digits with project-local collision checks. Server task IDs and proof-session IDs are unchanged. Existing evidence remains in place, without automatic migration. See the skill's [storage reference](skills/intent-prover/references/storage.md) for ownership, scope and submitted-version rules.
 
 ## The `intent-prover` command
 

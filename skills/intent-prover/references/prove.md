@@ -29,12 +29,14 @@ workflow; complete onboarding only if setup is missing.
 Construction and repairs share that session and its limits. Unsupported language
 behavior is a model boundary, not a reason to author replacement semantics.
 
-Prepare formal inputs in the session workspace's `inputs/`. Each operation saves
-exact submitted copies under `.intent/logs/<operation-id>/inputs/` at `projectRoot`.
+Prepare formal inputs directly in `.intent/logs/<log-id>/inputs/` at `projectRoot`,
+using the returned `workspaceDir`. Each attempt saves request/result metadata
+and submitted hashes under `attempts/<operation-id>/`, not input copies.
 Write `SCOPE.md`, `prove.sh` and `PROOF.md` in the returned `proofDir` (`artifacts/`)
-to explain the theorem, actual commands and outcome. Session authoring scratch
-remains in `.intent/prove/sessions/`. For optional requirement associations and
-current formal files, read [Project storage](storage.md).
+to explain the theorem, actual commands and outcome. Files stay in that same
+workspace, including unfinished work. Retries edit the same inputs; earlier
+versions are not retained. For optional requirement associations and current
+formal files, read [Project storage](storage.md).
 
 Completion means the requested property is established for the agreed domain,
 with matching program/claim bytes, terminal evidence and explicit assumptions.

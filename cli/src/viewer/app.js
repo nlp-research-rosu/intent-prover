@@ -121,7 +121,7 @@ function records() {
   const scans = paths.filter(p => /^(?:scan\/[^/]+|logs\/[^/]+\/artifacts)\/meta\.json$/.test(p))
     .map(p => ({ path: p, meta: json(p), report: json(p.replace(/meta.json$/, 'report.json')) })).filter(s => s.meta);
   for (const scan of scans) scan.progress = data.scanStates[scan.meta.task_id] || { status: scan.meta.task?.status || scan.meta.status };
-  const operations = paths.filter(p => /^(?:logs\/[^/]+|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(p))
+  const operations = paths.filter(p => /^(?:logs\/[^/]+(?:\/attempts\/[^/]+)?|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(p))
     .map(p => ({ path: p, evidence: json(p), request: json(p.replace(/result.json$/, 'request.json')) })).filter(o => o.evidence?.task && o.evidence.operation !== 'scan');
   const targets = [...new Set(paths.filter(p => /^(?:prove\/(?!sessions\/)|logs\/[^/]+\/artifacts\/|source\/)/.test(p) && /\/(PROOF|SCOPE)\.md$/.test(p)).map(p => p.slice(0, p.lastIndexOf('/') + 1)))];
   const active = [];
@@ -164,7 +164,7 @@ function reviewsPage(r) {
     return heading('Properties', 'Requirements, selected current formal files and their last relevant operations.')
       + (r.reviews.length ? `<div class="card table-wrap"><table><thead><tr><th>Requirement</th><th>Targets</th><th>Current specifications</th><th>Freshness</th></tr></thead><tbody>${r.reviews.map(p => `<tr><td><button class="link-button" data-review="${escape(p.path)}">${escape(p.requirement.statement)}</button></td><td class="mono">${p.requirement.targets.map(t => escape(t.path + (t.symbol ? '::' + t.symbol : ''))).join('<br>')}</td><td>${p.selection.specs.map(path => fileButton(path, path)).join(' ') || 'None yet'}</td><td>${status(p.freshness)}</td></tr>`).join('')}</tbody></table></div>` : empty('No properties yet', 'Add a structured requirement with the requirements CLI.'));
   }
-  const run = review.selection.last_run, request = run && `logs/${run}/request.json`, result = run && `logs/${run}/result.json`;
+  const run = review.selection.last_run, request = run && (r.paths.find(p => p.startsWith('logs/') && p.endsWith(`/${run}/request.json`)) || `logs/${run}/request.json`), result = request && request.replace(/request.json$/, 'result.json');
   return heading(review.requirement.statement, review.requirement.targets.map(t => t.path + (t.symbol ? '::' + t.symbol : '')).join(', '), status(review.freshness))
     + `<div class="stack"><div class="card card-body"><h2>Current specifications</h2>${review.selection.specs.map(path => `<details open><summary class="mono">${escape(path)}</summary>${fileView(path)}</details>`).join('') || '<p>No formal specification selected yet.</p>'}</div><div class="card card-body"><h2>Last relevant operation</h2>${run ? `${fileButton(request, 'Request')}${fileButton(result, 'Result')}<p class="small">${escape(data.assurance[request] || 'unchecked')} · ${escape(requirementState(request))}</p>` : '<p>Not checked yet.</p>'}${review.index ? fileButton(review.index, 'Owning index') : '<p>No owning index found.</p>'}</div></div>`;
 }
@@ -195,7 +195,7 @@ function scansPage(r) {
     + `<div class="row small mono muted" style="margin-bottom:15px">${escape(meta.task_id)} ${status(meta.report?.status)}</div><div class="tabs"><button data-scan-tab="report" class="${state.scanTab === 'report' ? 'active' : ''}">Report</button><button data-scan-tab="metadata" class="${state.scanTab === 'metadata' ? 'active' : ''}">Scan metadata</button></div><div class="stack">${body}</div>`;
 }
 function operationsView(r) {
-  const files = r.paths.filter(p => /^logs\/[^/]+\/request.json$/.test(p) && json(p)?.operation !== 'scan');
+  const files = r.paths.filter(p => /^logs\/[^/]+(?:\/attempts\/[^/]+)?\/request.json$/.test(p) && json(p)?.operation !== 'scan');
   if (!r.operations.length && !files.length) return empty('No verification runs', 'Run, validation and proof results appear here.');
   return `<div class="stack">${r.operations.map(o => {
     const task = o.evidence.task;
@@ -294,7 +294,7 @@ document.addEventListener('click', async event => {
   if (d.proofTab) state.proofTab = d.proofTab;
   if (d.file) {
     state.file = d.file;
-    state.view = /^(?:logs\/[^/]+|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(d.file) ? 'proofs' : 'artifacts';
+    state.view = /^(?:logs\/[^/]+(?:\/attempts\/[^/]+)?|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(d.file) ? 'proofs' : 'artifacts';
     if (state.view === 'proofs') state.proofTab = 'operations';
   }
   navigate();

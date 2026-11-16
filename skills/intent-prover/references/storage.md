@@ -12,17 +12,17 @@ with source. Ordinary chats and edits do not trigger remote work.
       requirements.json
       index.json
       specs/<bundle-id>/
-  logs/<operation-id>/
-    request.json
-    result.json
+  logs/<log-id>/
     inputs/
     artifacts/
-  prove/sessions/<session-id>/
+    attempts/<operation-id>/
+      request.json
+      result.json
 ```
 
 `REQUIREMENTS.md` is editable project-wide human intent. Scan consumes that brief,
 structured requirements applicable to the selected source files and their selected
-current specifications. Operation logs and authoring scratch are not uploaded.
+current specifications. Attempt records and unrelated workspace files are not uploaded.
 
 Use the local `requirements` CLI to add/update/remove structured requirements;
 its help owns syntax. Input JSON contains `statement`, nonempty `targets` with
@@ -42,18 +42,22 @@ Each associated submission allocates an independent spec bundle; `--spec-id`
 selects an existing bundle for update/sharing. Matching filenames do not choose
 a bundle. These local associations are not uploaded or claims of proof coverage.
 
-Logs retain the exact submitted inputs, hashes, controls, outcomes and saved remote
-job links. Scan retains its compressed snapshot under `inputs/snapshot.json.gz`.
+New sessions start directly in their log folder. Inputs and reports stay there,
+including unfinished work; retries edit the same inputs. No finalization, copying
+into logs or cleanup is needed. Attempts retain request/result metadata, submitted
+hashes, controls, outcomes and remote job links, not historical input copies.
+Scan uses a standalone operation log and retains its compressed snapshot under
+`inputs/snapshot.json.gz`.
 Successful associated formal inputs can become current spec copies. A failed
 attempt can update `last_run`, but cannot replace current specs. Changed source,
-requirements, specs, frozen inputs or a newer selection prevent late promotion.
+requirements, specs, submitted input files or a newer selection prevent late promotion.
 A reference is not proof: inspect the operation's actual outcome, selected claims,
 assumptions and submitted versions. Unsubmitted retained specs have unknown
 freshness for that attempt.
 
-Write proof reports, scope and reproduction commands in the operation's returned
-`proofDir` (`artifacts/`). Never edit frozen inputs or historical results.
-`prove/sessions/` remains ignored authoring scratch. The viewer excludes it and
-frozen input copies. Existing evidence files are left in place, not migrated.
+Write proof reports, scope and reproduction commands in the returned
+`proofDir` (the session log's `artifacts/`, shared across attempts). Never edit
+historical request/result metadata or Scan snapshots. The viewer excludes input
+files. Existing evidence files are left in place, not migrated.
 Previously saved proof-task results remain visible and recoverable in their
 original session directories; authoring inputs there are not exported.
