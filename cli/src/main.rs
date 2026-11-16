@@ -4,9 +4,11 @@ mod channel;
 mod config;
 mod help;
 mod inputs;
+mod requirements;
 mod scan;
 mod semantics;
 mod session;
+mod storage;
 mod viewer;
 mod workflow;
 
@@ -32,6 +34,9 @@ enum Command {
     Scan(scan::ScanArgs),
     /// Show plugin Scan configuration and check the saved credential.
     Doctor(scan::PluginArgs),
+    /// Manage local requirements and their source-file associations.
+    #[command(subcommand)]
+    Requirements(requirements::Command),
     /// View local check artifacts live, or export a self-contained HTML report.
     #[command(after_help = help::VIEW)]
     View(viewer::ViewArgs),
@@ -145,6 +150,9 @@ pub enum TaskCommand {
 
 #[derive(Args)]
 pub struct ProofArgs {
+    /// Declared source coverage, path or path::symbol. Dependencies are not targets.
+    #[arg(long)]
+    pub target: Vec<String>,
     /// Session ID; resolves the project and pinned semantics.
     #[arg(long)]
     pub session: Uuid,
@@ -189,6 +197,12 @@ pub struct ProofArgs {
     /// See the claim-selection example below when combining trust and filtering.
     #[arg(long)]
     pub trusted: Vec<String>,
+    /// Associate the submitted formal files with a local requirement; repeat as needed.
+    #[arg(long)]
+    pub requirement: Vec<String>,
+    /// Update an existing local specification bundle instead of allocating a new one.
+    #[arg(long, requires = "requirement")]
+    pub spec_id: Option<String>,
 }
 
 #[derive(Args)]
@@ -262,6 +276,7 @@ fn dispatch(cli: Cli) -> CommandResult {
             unreachable!("text commands are dispatched separately")
         }
         Command::View(args) => viewer::view(args),
+        Command::Requirements(command) => requirements::dispatch(command),
         Command::Login => auth::login(),
         Command::Config => Ok((0, config::view()?)),
         Command::Health => {

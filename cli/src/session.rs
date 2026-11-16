@@ -13,6 +13,8 @@ use uuid::Uuid;
 pub struct Session {
     pub session_id: Uuid,
     pub project_root: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_id: Option<String>,
     pub semantics: semantics::Identity,
     pub attempts_used: u32,
     pub validations_used: u32,
@@ -25,35 +27,49 @@ pub fn directory(id: Uuid) -> Result<PathBuf> {
 }
 
 pub fn workspace(session: &Session) -> PathBuf {
-    session
-        .project_root
-        .join(".intent/prove/sessions")
-        .join(session.session_id.to_string())
+    match &session.log_id {
+        Some(id) => session.project_root.join(".intent/logs").join(id),
+        None => session
+            .project_root
+            .join(".intent/prove/sessions")
+            .join(session.session_id.to_string()),
+    }
 }
 
-// Session state is scratch; specs and PROOF.md elsewhere under .intent/ are meant to be committed.
-fn ignore_sessions(session: &Session) -> Result<()> {
-    let dir = session.project_root.join(".intent/prove/sessions");
-    let file = dir.join(".gitignore");
-    if !file.exists() {
-        fs::write(file, "*\n")?;
+pub fn legacy_operation(name: &str) -> Option<&str> {
+    let (phase, number) = name.split_once('-')?;
+    number.parse::<u32>().ok()?;
+    match phase {
+        "proof" => Some("prove"),
+        "validation" => Some("validate"),
+        "run" => Some("run"),
+        _ => None,
     }
-    Ok(())
 }
 
 pub fn start(semantics_id: &str) -> CommandResult {
+    let project_root = project_root(&std::env::current_dir()?)?;
+    let semantics = semantics::select(semantics_id, &config::load()?)?;
+    let _lock = crate::storage::lock(&project_root)?;
+    let log_id = crate::storage::new_id(&project_root)?;
     let session = Session {
         session_id: Uuid::new_v4(),
-        project_root: project_root(&std::env::current_dir()?)?,
-        semantics: semantics::select(semantics_id, &config::load()?)?,
+        project_root,
+        log_id: Some(log_id),
+        semantics,
         attempts_used: 0,
         validations_used: 0,
         runs_used: 0,
     };
     fs::create_dir_all(directory(session.session_id)?.parent().unwrap())?;
     fs::create_dir(directory(session.session_id)?)?;
-    fs::create_dir_all(workspace(&session))?;
-    ignore_sessions(&session)?;
+    crate::storage::safe_parent(&session.project_root, &workspace(&session))?;
+    fs::create_dir_all(
+        workspace(&session)
+            .parent()
+            .context("Missing logs directory")?,
+    )?;
+    fs::create_dir(workspace(&session))?;
     save(&session)?;
     Ok((0, view(&session)?))
 }
@@ -65,6 +81,13 @@ pub fn load(id: Uuid) -> Result<Session> {
     ensure!(
         session.session_id == id,
         "Session ID does not match its directory"
+    );
+    ensure!(
+        session
+            .log_id
+            .as_deref()
+            .is_none_or(crate::storage::valid_id),
+        "Invalid session log ID"
     );
     Ok(session)
 }

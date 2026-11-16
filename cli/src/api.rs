@@ -25,6 +25,10 @@ pub struct Api {
 pub struct Upload {
     fields: Vec<(&'static str, String)>,
     file: UploadFile,
+    inputs: Vec<(String, Vec<u8>)>,
+    targets: Vec<Value>,
+    requirements: Vec<Value>,
+    specification_id: Option<String>,
 }
 
 struct UploadFile {
@@ -118,7 +122,8 @@ impl Api {
     }
 
     pub fn prepare_run(&self, root: &Path, args: RunArgs) -> Result<Upload> {
-        let semantics = crate::session::load(args.session)?.semantics;
+        let proof_session = crate::session::load(args.session)?;
+        let semantics = proof_session.semantics;
         crate::semantics::require(&semantics, args.semantics.as_deref())?;
         let (program, name) = inputs::resolve(root, &args.program)?;
         let file_name = Path::new(&name)
@@ -126,6 +131,7 @@ impl Api {
             .ok_or_else(|| anyhow!("Program path has no file name"))?
             .to_string_lossy()
             .into_owned();
+        let bytes = fs::read(program)?;
         Ok(Upload {
             fields: vec![
                 ("semanticsId", semantics.id),
@@ -133,10 +139,21 @@ impl Api {
             ],
             file: UploadFile {
                 field: "programFile",
-                name: file_name,
+                name: file_name.clone(),
                 mime: None,
-                bytes: fs::read(program)?,
+                bytes: bytes.clone(),
             },
+            inputs: vec![(
+                if proof_session.log_id.is_some() {
+                    name
+                } else {
+                    file_name
+                },
+                bytes,
+            )],
+            targets: Vec::new(),
+            requirements: Vec::new(),
+            specification_id: None,
         })
     }
 
@@ -150,6 +167,40 @@ impl Api {
 
     pub fn submit_proof(&self, upload: &Upload) -> Result<Value> {
         self.submit("/proofs", upload)
+    }
+
+    pub fn record_request(
+        &self,
+        upload: &Upload,
+        session: &Session,
+        operation: &str,
+    ) -> Result<PathBuf> {
+        let mut controls = serde_json::Map::new();
+        for (key, value) in &upload.fields {
+            let values = controls.entry(key.to_string()).or_insert_with(|| json!([]));
+            values
+                .as_array_mut()
+                .context("Invalid upload controls")?
+                .push(json!(value));
+        }
+        let request = json!({
+            "operation":operation,"session_id":session.session_id,"semantics":session.semantics,
+            "attempt":match operation { "run" => session.runs_used + 1, "validate" => session.validations_used + 1, _ => session.attempts_used + 1 },
+            "api_url":self.base,"requirements":upload.requirements,"spec_id":upload.specification_id,
+            "upload_sha256":crate::storage::hash(&upload.file.bytes),"controls":controls,
+            "targets":upload.targets,
+            "requirement_binding":{"version":1,"kind":"declared_association_not_uploaded","records":upload.requirements}
+        });
+        if session.log_id.is_some() {
+            crate::storage::attempt(
+                &session.project_root,
+                &crate::session::workspace(session),
+                request,
+                &upload.inputs,
+            )
+        } else {
+            crate::storage::operation(&session.project_root, request, &upload.inputs)
+        }
     }
 
     pub fn record_submission(&self, accepted: &Value, evidence: &Path) -> Result<()> {
@@ -234,6 +285,19 @@ impl Api {
             let message = stop["message"].as_str().unwrap_or("Task wait stopped");
             bail!("{message}; evidence: {}", evidence.display());
         }
+        let successful = task["status"] == "completed"
+            && task["error"].is_null()
+            && matches!(
+                task["result"].as_str(),
+                Some("proved" | "valid" | "success")
+            )
+            && task["toolRuns"]
+                .as_array()
+                .and_then(|runs| runs.last())
+                .is_none_or(|run| run["exitCode"] == 0);
+        if evidence.join("request.json").is_file() {
+            crate::storage::finish_properties(&session.project_root, &evidence, successful)?;
+        }
         Ok(task)
     }
 
@@ -243,7 +307,32 @@ impl Api {
         args: ProofArgs,
         depth: Option<u64>,
     ) -> Result<Upload> {
-        let semantics = crate::session::load(args.session)?.semantics;
+        let proof_session = crate::session::load(args.session)?;
+        let semantics = proof_session.semantics;
+        let mut targets = Vec::new();
+        for target in &args.target {
+            let (path, symbol) = target
+                .split_once("::")
+                .map_or((target.as_str(), None), |(p, s)| (p, Some(s)));
+            crate::requirements::relative_path(path)?;
+            anyhow::ensure!(
+                symbol.is_none_or(|s| !s.trim().is_empty() && !s.chars().any(char::is_control)),
+                "Invalid target symbol"
+            );
+            let (file, _) = inputs::resolve(&proof_session.project_root, Path::new(path))?;
+            targets.push(json!({"path":path,"symbol":symbol,"source_sha256":crate::storage::hash(fs::read(file)?)}));
+        }
+        let docs = crate::requirements::documents(&proof_session.project_root)?;
+        let mut requirements = Vec::new();
+        for id in &args.requirement {
+            let record = docs
+                .iter()
+                .flat_map(|(_, _, doc)| &doc.requirements)
+                .find(|record| record.id == *id)
+                .with_context(|| format!("Unknown requirement ID: {id}"))?;
+            requirements
+                .push(json!({"id":id,"record_sha256":crate::requirements::record_hash(record)?}));
+        }
         crate::semantics::require(&semantics, args.semantics.as_deref())?;
         let (_, spec_name) = inputs::resolve_proof(root, &args.spec)?;
         let verification_name = args
@@ -274,12 +363,12 @@ impl Api {
         let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(zip::CompressionMethod::Deflated);
-        for (name, bytes) in files {
+        for (name, bytes) in &files {
             if name.chars().any(|c| c == '"' || c.is_control()) {
                 bail!("Unsupported characters in upload path: {name:?}");
             }
-            archive.start_file(name, options)?;
-            archive.write_all(&bytes)?;
+            archive.start_file(name.as_str(), options)?;
+            archive.write_all(bytes)?;
         }
         for (field, values) in [
             ("claim", args.claim),
@@ -299,6 +388,10 @@ impl Api {
                 mime: Some("application/zip"),
                 bytes: archive.finish()?.into_inner(),
             },
+            inputs: files.into_iter().collect(),
+            targets,
+            requirements,
+            specification_id: args.spec_id,
         })
     }
 

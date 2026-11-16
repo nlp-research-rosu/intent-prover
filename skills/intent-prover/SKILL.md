@@ -19,6 +19,7 @@ permission to edit. Never read credentials into chat.
 | Submit a remote code scan or collect its results | [Scan](references/scan.md) |
 | Prove a property of a program with K | [Prove](references/prove.md) |
 | View or export saved results without remote work | [Deliver results](#deliver-results) |
+| Read or update local requirements and specification links | [Project storage](references/storage.md) |
 
 Scan is not a prerequisite for Prove. Reuse completed setup; do not sign in,
 install updates, submit jobs or deliver old results on ordinary messages.
@@ -55,8 +56,9 @@ the global CLI to export the existing local viewer:
     intent-prover view --output <new-report.html>
 
 Run from the repository root (or use `--project <root>` before `view`). Choose a
-new filename under the operation's `.intent/scan/<task-id>/` or
-`.intent/prove/<target>/` directory; never delete an older report to reuse a name.
+new filename under Scan's `.intent/logs/<operation-id>/artifacts/` directory or
+Prove's returned `proofDir` (the session log's `artifacts/`); never delete an
+older report to reuse a name.
 Prove must first update its readable `PROOF.md` and `SCOPE.md`, including narrower
 or unsuccessful outcomes. The viewer displays those documents; it does not write them.
 
@@ -64,8 +66,8 @@ Check export succeeded and the HTML contains the intended result. Present **one
 local HTML link first**, with a brief outcome, checked scope and important
 limitations—not a list of JSON/Markdown files or a remote-console login link.
 Open the relevant section by appending a hash to that link (URL-encode paths):
-`#view=scans&scan=scan%2F<task-id>%2Fmeta.json` or
-`#view=proofs&proof=prove%2F<target>%2F&proofTab=report`.
+`#view=scans&scan=logs%2F<operation-id>%2Fresult.json` or
+`#view=proofs&proof=logs%2F<log-id>%2Fartifacts%2F&proofTab=report`.
 
 The HTML reads saved evidence without network access or sign-in. It includes
 optional **Open job in Prover** links; remote access may require login, and some

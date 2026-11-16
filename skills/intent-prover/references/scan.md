@@ -17,7 +17,10 @@ request is not permission to upload code; ask if remote analysis was not request
 
 Run inside a Git repository. The snapshot includes tracked and non-ignored
 untracked text files within the requested path. It excludes secrets, binary,
-generated and vendored files, lockfiles and `.intent/` evidence except `NOTES.md`.
+generated and vendored files, lockfiles and historical `.intent/` evidence.
+It includes `.intent/REQUIREMENTS.md`, applicable structured requirements and their
+selected current specifications. These receive the same secret masking and size
+limits; context that exceeds the limits stops submission rather than being trimmed.
 All submissions use `/scan`. No command reads chat transcripts, prompts,
 plans or edit history. Upload metadata is recorded in `.intent/.sent.log`.
 
@@ -32,7 +35,9 @@ Use `scan collect <task-id>` to resume polling and save evidence without
 resubmitting source. `scan collect` handles outstanding scans in this project.
 Ordinary messages do not resume scans or deliver results.
 
-Reports live in `.intent/scan/<task-id>/` at the repository root. Preserve
+Reports live in `.intent/logs/<operation-id>/artifacts/` at the repository root.
+`request.json` and `result.json` beside that folder record the operation and
+source hashes. The backend task ID is unchanged. Preserve
 existing evidence. Commit project knowledge with source; do not blanket-ignore
 `.intent/`.
 
@@ -41,5 +46,6 @@ report](../SKILL.md#deliver-results) using `intent-prover view --output <new-rep
 The saved remote job URL is a secondary link inside the viewer. State coverage
 and exclusions; Scan findings are not reproduced bugs or formal proofs.
 Offer to reproduce or fix; findings do not authorize edits. After a
-fix, another remote Scan requires an explicit request. When the user confirms
-intended behaviour, append a concise bullet to `.intent/NOTES.md` for later scans.
+fix, another remote Scan requires an explicit request. Maintain confirmed project
+intent in `.intent/REQUIREMENTS.md` and source-specific structured requirements
+as described in [Project storage](storage.md).

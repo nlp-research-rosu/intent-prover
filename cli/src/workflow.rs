@@ -1,7 +1,7 @@
 use crate::{
     CommandResult, ProofArgs, ProveArgs, RunArgs, TaskCommand, api::Api, channel, config, session,
 };
-use anyhow::{Context, bail, ensure};
+use anyhow::{bail, ensure};
 use serde_json::{Value, json};
 
 pub fn run_program(args: RunArgs) -> CommandResult {
@@ -18,11 +18,12 @@ pub fn run_program(args: RunArgs) -> CommandResult {
     if proof_session.runs_used >= config.max_run_attempts {
         return exhausted("run", proof_session.runs_used, config.max_run_attempts);
     }
-    let response = api.submit_run(&upload)?;
+    let evidence = api.record_request(&upload, &proof_session, "run")?;
+    let response = api
+        .submit_run(&upload)
+        .map_err(|error| submission_failure(&evidence, error))?;
     proof_session.runs_used += 1;
     session::save(&proof_session)?;
-    let evidence =
-        session::workspace(&proof_session).join(format!("run-{:03}", proof_session.runs_used));
     api.record_submission(&response, &evidence)?;
     drop(lock);
     let task = api.complete(
@@ -62,10 +63,12 @@ pub fn validate(args: ProofArgs) -> CommandResult {
             config.max_validation_attempts,
         );
     }
-    let response = api.submit_validation(&upload)?;
+    let evidence = api.record_request(&upload, &proof_session, "validate")?;
+    let response = api
+        .submit_validation(&upload)
+        .map_err(|error| submission_failure(&evidence, error))?;
     proof_session.validations_used += 1;
     session::save(&proof_session)?;
-    let evidence = root.join(format!("validation-{:03}", proof_session.validations_used));
     api.record_submission(&response, &evidence)?;
     drop(lock);
     let task = api.complete(
@@ -108,10 +111,12 @@ pub fn prove(args: ProveArgs) -> CommandResult {
             config.max_proof_attempts,
         );
     }
-    let response = api.submit_proof(&upload)?;
+    let evidence = api.record_request(&upload, &proof_session, "prove")?;
+    let response = api
+        .submit_proof(&upload)
+        .map_err(|error| submission_failure(&evidence, error))?;
     proof_session.attempts_used += 1;
     session::save(&proof_session)?;
-    let evidence = root.join(format!("proof-{:03}", proof_session.attempts_used));
     api.record_submission(&response, &evidence)?;
     drop(lock);
     let task = api.complete(
@@ -148,52 +153,84 @@ pub fn task(command: TaskCommand) -> CommandResult {
             session: session_id,
         } => {
             let proof_session = session::load(session_id)?;
-            let root = session::workspace(&proof_session);
+            let logs = proof_session.project_root.join(".intent/logs");
+            let workspace = session::workspace(&proof_session);
+            let attempts = workspace.join("attempts");
             let id = id.to_string();
-            for entry in std::fs::read_dir(&root)? {
-                let entry = entry?;
-                if !entry.file_type()?.is_dir() {
-                    continue;
-                }
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
-                let Some((phase, number)) = name.split_once('-') else {
-                    continue;
+            for root in [&logs, &attempts, &workspace] {
+                crate::storage::safe_parent(&proof_session.project_root, root)?;
+                let entries = match std::fs::read_dir(root) {
+                    Ok(entries) => entries,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
                 };
-                if number.parse::<u32>().is_err() {
-                    continue;
+                for entry in entries {
+                    let entry = entry?;
+                    if !entry.file_type()?.is_dir() {
+                        continue;
+                    }
+                    let operation = if root != &workspace {
+                        let request = entry.path().join("request.json");
+                        crate::storage::safe_parent(&proof_session.project_root, &request)?;
+                        let Some(manifest) = std::fs::read(&request)
+                            .ok()
+                            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                        else {
+                            continue;
+                        };
+                        if manifest["session_id"] != proof_session.session_id.to_string() {
+                            continue;
+                        }
+                        manifest["operation"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned()
+                    } else {
+                        let name = entry.file_name();
+                        let Some(operation) =
+                            session::legacy_operation(&name.to_string_lossy()).map(str::to_owned)
+                        else {
+                            continue;
+                        };
+                        operation
+                    };
+                    let (used, limit) = match operation.as_str() {
+                        "prove" => (proof_session.attempts_used, config.max_proof_attempts),
+                        "validate" => (
+                            proof_session.validations_used,
+                            config.max_validation_attempts,
+                        ),
+                        "run" => (proof_session.runs_used, config.max_run_attempts),
+                        _ => continue,
+                    };
+                    let evidence = entry.path();
+                    crate::storage::safe_parent(
+                        &proof_session.project_root,
+                        &evidence.join("result.json"),
+                    )?;
+                    let Some(snapshot) = std::fs::read(evidence.join("result.json"))
+                        .ok()
+                        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                    else {
+                        continue;
+                    };
+                    let accepted = &snapshot["task"];
+                    if accepted["id"] != id {
+                        continue;
+                    }
+                    ensure!(
+                        accepted["semantics"]["id"] == proof_session.semantics.id
+                            && accepted["semantics"]["commit"] == proof_session.semantics.commit,
+                        "Saved task semantics identity is missing or mismatched"
+                    );
+                    let task = api.complete(
+                        accepted,
+                        config.poll_interval_seconds,
+                        evidence.clone(),
+                        &proof_session,
+                    )?;
+                    return finish(&proof_session, task, evidence, session::budget(used, limit));
                 }
-                let (used, limit) = match phase {
-                    "proof" => (proof_session.attempts_used, config.max_proof_attempts),
-                    "validation" => (
-                        proof_session.validations_used,
-                        config.max_validation_attempts,
-                    ),
-                    "run" => (proof_session.runs_used, config.max_run_attempts),
-                    _ => continue,
-                };
-                let evidence = entry.path();
-                let snapshot: Value = serde_json::from_slice(
-                    &std::fs::read(evidence.join("result.json")).with_context(|| {
-                        format!("Cannot read evidence in {}", evidence.display())
-                    })?,
-                )?;
-                let accepted = &snapshot["task"];
-                if accepted["id"] != id {
-                    continue;
-                }
-                ensure!(
-                    accepted["semantics"]["id"] == proof_session.semantics.id
-                        && accepted["semantics"]["commit"] == proof_session.semantics.commit,
-                    "Saved task semantics identity is missing or mismatched"
-                );
-                let task = api.complete(
-                    accepted,
-                    config.poll_interval_seconds,
-                    evidence.clone(),
-                    &proof_session,
-                )?;
-                return finish(&proof_session, task, evidence, session::budget(used, limit));
             }
             bail!(
                 "Task {id} has no saved evidence in session {session_id}; use task show to inspect its server state"
@@ -223,6 +260,18 @@ fn finish(
         && task["error"].is_null();
     let mut response = json!({"task": task, "sessionId": proof_session.session_id,
         "budget": budget, "evidenceDir": evidence});
+    if evidence.join("request.json").is_file() {
+        let manifest: Value =
+            serde_json::from_slice(&std::fs::read(evidence.join("request.json"))?)?;
+        if manifest["operation"] == "prove" {
+            let workspace = match manifest["workspace"].as_str() {
+                Some(relative) => proof_session.project_root.join(".intent").join(relative),
+                None => evidence.clone(),
+            };
+            crate::storage::safe_parent(&proof_session.project_root, &workspace)?;
+            response["proofDir"] = json!(workspace.join("artifacts"));
+        }
+    }
     if exit.is_none() {
         response["exitCode"] = Value::Null;
         if !completed_without_run {
@@ -240,6 +289,17 @@ fn finish(
         proof_session.project_root.display()
     );
     Ok((exit.unwrap_or(i32::from(!completed_without_run)), response))
+}
+
+fn submission_failure(evidence: &std::path::Path, error: anyhow::Error) -> anyhow::Error {
+    if let Err(saved) = crate::api::write_json(
+        evidence,
+        "result.json",
+        &json!({"status":"submission_failed","error":error.to_string()}),
+    ) {
+        return error.context(format!("Could not save submission failure: {saved}"));
+    }
+    error
 }
 
 fn exhausted(phase: &str, used: u32, limit: u32) -> CommandResult {

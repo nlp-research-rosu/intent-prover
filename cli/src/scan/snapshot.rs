@@ -288,7 +288,7 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
         {
             continue;
         }
-        if path.starts_with(".intent/") && path != ".intent/NOTES.md" {
+        if path.starts_with(".intent/") {
             continue;
         }
         if let Some(reason) = path_reason(path) {
@@ -408,6 +408,103 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
         files.push(file);
     }
     ensure!(!files.is_empty(), "Scan found no text files to scan here.");
+    let paths: Vec<_> = files
+        .iter()
+        .map(|file| file["path"].as_str().unwrap().to_owned())
+        .collect();
+    let context = crate::requirements::context(&root, &paths)?;
+    let mut binding = json!({"version":1,"kind":"consumed_context","brief":context["brief"].as_str().filter(|s|!s.is_empty()).map(|s|json!({"source_sha256":hash(s)})),"records":context["requirements"].as_array().into_iter().flatten().map(|r|json!({"id":r["id"],"record_sha256":hash(r.to_string())})).collect::<Vec<_>>(),"excluded":[]});
+    let mut docs = BTreeMap::<String, Vec<Value>>::new();
+    for record in context["requirements"].as_array().into_iter().flatten() {
+        let source = record["targets"][0]["path"].as_str().unwrap();
+        let location = if record["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|target| target["path"] == source)
+        {
+            format!(".intent/source/{source}/requirements.json")
+        } else {
+            ".intent/source/requirements.json".into()
+        };
+        docs.entry(location).or_default().push(record.clone());
+    }
+    let mut contexts: Vec<_> = docs
+        .into_iter()
+        .map(|(path, records)| {
+            (
+                path,
+                json!({"schema_version":1,"requirements":records}).to_string(),
+            )
+        })
+        .collect();
+    if let Some(brief) = context["brief"].as_str().filter(|s| !s.is_empty()) {
+        contexts.insert(0, (".intent/REQUIREMENTS.md".into(), brief.into()));
+    }
+    let ids: BTreeSet<_> = context["requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|record| record["id"].as_str())
+        .collect();
+    let mut specs = BTreeSet::new();
+    for (_, index) in crate::storage::indexes(&root)? {
+        for (id, selection) in index.properties {
+            if ids.contains(id.as_str()) {
+                specs.extend(selection.specs);
+            }
+        }
+    }
+    for path in specs {
+        let file = crate::storage::spec_path(&root, &path)?;
+        let Ok(meta) = fs::symlink_metadata(&file) else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() > MAX_FILE as u64 {
+            continue;
+        }
+        if let Ok(text) = fs::read_to_string(file) {
+            contexts.push((format!(".intent/{path}"), text));
+        }
+    }
+    for (path, raw) in contexts {
+        let role = if path.contains("/specs/") {
+            "specification"
+        } else {
+            "requirements"
+        };
+        let (text, n) = redactor.text(&raw);
+        let file = json!({"path":path,"content":text});
+        let cost = file.to_string().len() + 2;
+        ensure!(
+            text.len() <= MAX_FILE
+                && bytes + text.len() <= MAX_TEXT
+                && json_bytes + cost <= JSON_CAP
+                && files.len() < MAX_FILES,
+            "Requirements and specification context exceeds the scan size limits"
+        );
+        sources.push(json!({"path":path,"source_sha256":hash(&raw),"submitted_sha256":hash(&text),"role":role}));
+        if path.ends_with("REQUIREMENTS.md") {
+            binding["brief"]["submitted_sha256"] = json!(hash(&text));
+        }
+        bytes += text.len();
+        json_bytes += cost;
+        redactions += n;
+        files.push(file);
+    }
+    for record in binding["records"]
+        .as_array_mut()
+        .context("Requirement bindings")?
+    {
+        if let Some(original) = context["requirements"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|original| original["id"] == record["id"])
+        {
+            record["submitted_sha256"] = json!(hash(redactor.text(&original.to_string()).0));
+        }
+    }
     files.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     let head = git(&root, &["rev-parse", "--verify", "-q", "HEAD"])
         .map(|s| s.trim().to_owned())
@@ -428,6 +525,7 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
     }
     let mut source = meta;
     source["files"] = json!(sources);
+    source["requirement_binding"] = binding;
     source["snapshot_sha256"] = json!(hash(&gz));
     source["trimmed_total"] = json!(trimmed_total);
     Ok(Snapshot {
