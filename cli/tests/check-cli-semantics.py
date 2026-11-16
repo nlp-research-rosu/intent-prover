@@ -39,7 +39,8 @@ class Handler(BaseHTTPRequestHandler):
             task_id = self.path.rsplit("/", 1)[-1]
             self.respond({"id": task_id, "status": self.server.task_status,
                           "semantics": {key: IDENTITY[key] for key in ("id", "commit")},
-                          "toolRuns": [{"tool": "kprove", "exitCode": self.server.exit_code}],
+                          "toolRuns": self.server.tool_runs if self.server.tool_runs is not None else
+                          [{"tool": "kprove", "exitCode": self.server.exit_code}],
                           "definitionId": "test-definition",
                           "result": self.server.outcome,
                           "newBackendField": {"retained": True}})
@@ -83,6 +84,7 @@ class Tests(unittest.TestCase):
         self.server.after_submit = None
         self.server.task_status = "completed"
         self.server.exit_code = 0
+        self.server.tool_runs = None
         self.server.outcome = "proved"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -287,6 +289,22 @@ class Tests(unittest.TestCase):
         submitted = saved["properties"][requirement]["specs"][0]
         self.assertNotEqual(submitted["sha256"], hashlib.sha256(frozen).hexdigest())
 
+        negative_attempts = 0
+        for command, outcome, runs in (("prove", "notProved", None),
+                                       ("prove", "notProved", []),
+                                       ("validate", "invalid", []),
+                                       ("prove", None, None)):
+            with self.subTest(command=command, outcome=outcome, cached=runs == []):
+                self.server.outcome = outcome
+                self.server.exit_code = 0
+                self.server.tool_runs = runs
+                negative = self.operation(command, extra=("--requirement", requirement,
+                                                           "--spec-id", bundle))
+                negative_attempts += 1
+                selection = json.loads(index.read_text())["properties"][requirement]
+                self.assertEqual(selection["last_run"], Path(negative["evidenceDir"]).name)
+                self.assertEqual(current_spec.read_bytes(), frozen)
+        self.server.tool_runs = None
         self.server.task_status = "failed"
         self.server.exit_code = None
         self.server.outcome = None
@@ -299,7 +317,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(saved["task"], json.loads(evidence.read_text())["task"])
         self.assertEqual(Path(self.cli("session", "show", self.session["sessionId"])["workspaceDir"]),
                          self.workspace)
-        self.assertEqual(len(list((self.workspace / "attempts").iterdir())), 3)
+        self.assertEqual(len(list((self.workspace / "attempts").iterdir())), 3 + negative_attempts)
         self.assertFalse(any(path.name == "inputs" for path in (self.workspace / "attempts").rglob("*")))
         initial_manifest = json.loads((Path(successful["evidenceDir"]) / "request.json").read_text())
         self.assertNotEqual(initial_manifest["inputs"][0]["sha256"],

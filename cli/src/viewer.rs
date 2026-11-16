@@ -316,7 +316,9 @@ fn snapshot(root: &Path, name: &str, data_dirs: &[PathBuf]) -> Result<Snapshot> 
                 if request["operation"] == "prove" {
                     // Aggregate results can include admitted/trusted claims or a cached result.
                     "server_reported_only; per-claim coverage unestablished; audit not recorded"
-                } else if request["operation"] == "scan" && result["scan"]["status"] == "done" {
+                } else if matches!(request["operation"].as_str(), Some("scan" | "deepscan"))
+                    && (result["status"] == "done" || result["scan"]["status"] == "done")
+                {
                     "llm_reviewed"
                 } else {
                     "unchecked"

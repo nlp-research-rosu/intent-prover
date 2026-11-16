@@ -53,8 +53,10 @@ including unfinished work; retries edit the same inputs. No finalization, copyin
 into logs or cleanup is needed. Attempts retain request/result metadata, submitted
 hashes, controls, outcomes and remote job links, not historical input copies.
 Scan uses a standalone operation log and retains its compressed snapshot under
-`inputs/snapshot.json.gz`.
-Successful associated formal inputs can become current spec copies. A failed
+`inputs/snapshot.json.gz`, canonical metadata and evidence level in `result.json`,
+and the saved report in `artifacts/report.json`.
+Associated formal inputs can become current spec copies only after a completed,
+error-free `proved`, `valid` or `success` result with no failed final tool run. A failed
 attempt can update `last_run`, but cannot replace current specs. Changed source,
 requirements, specs, submitted input files or a newer selection prevent late promotion.
 A reference is not proof: inspect the operation's actual outcome, selected claims,

@@ -90,7 +90,7 @@ function checkScan(task, saved, project, apiUrl) {
   }
   requireValue(/^[a-z0-9]{6}$/.test(saved.operation_id), "Scan has no valid local operation ID");
   const dir = path.join(repo, ".intent/logs", saved.operation_id, "artifacts");
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8"));
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, "..", "result.json"), "utf8"));
   const bytes = fs.readFileSync(path.join(dir, "report.json"));
   const ref = task.result.report;
   requireValue(meta.task_id === task.id && meta.report?.status === "saved", "Saved Scan metadata differs from service evidence");

@@ -287,10 +287,14 @@ impl Api {
         }
         let successful = task["status"] == "completed"
             && task["error"].is_null()
-            && task["toolRuns"].as_array().is_some_and(|runs| {
-                runs.is_empty() && !task["result"].is_null()
-                    || runs.last().is_some_and(|run| run["exitCode"] == 0)
-            });
+            && matches!(
+                task["result"].as_str(),
+                Some("proved" | "valid" | "success")
+            )
+            && task["toolRuns"]
+                .as_array()
+                .and_then(|runs| runs.last())
+                .is_none_or(|run| run["exitCode"] == 0);
         if evidence.join("request.json").is_file() {
             crate::storage::finish_properties(&session.project_root, &evidence, successful)?;
         }

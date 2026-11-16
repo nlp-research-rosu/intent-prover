@@ -118,11 +118,16 @@ function records() {
       const selection = owner?.index.properties[requirement.id] || { specs: [], last_run: null };
       return { path: requirement.id, requirement, selection, index: owner?.path, freshness: data.freshness[`${owner?.path}#${requirement.id}`] || 'unknown' };
     }));
-  const scans = paths.filter(p => /^(?:scan\/[^/]+|logs\/[^/]+\/artifacts)\/meta\.json$/.test(p))
-    .map(p => ({ path: p, meta: json(p), report: json(p.replace(/meta.json$/, 'report.json')) })).filter(s => s.meta);
+  const canonicalScans = paths.filter(p => /^logs\/[^/]+\/result\.json$/.test(p))
+    .map(p => ({ path: p, meta: json(p), report: json(p.replace(/result.json$/, 'artifacts/report.json')) }))
+    .filter(s => ['scan', 'deepscan'].includes(s.meta?.operation) && s.meta.task_id);
+  const scans = [...canonicalScans, ...paths.filter(p => /^(?:scan\/[^/]+|logs\/[^/]+\/artifacts)\/meta\.json$/.test(p))
+    .map(p => ({ path: p, meta: json(p), report: json(p.replace(/meta.json$/, 'report.json')) }))
+    .filter(s => s.meta && !canonicalScans.some(c => c.meta.task_id === s.meta.task_id))]
+    .sort((a, b) => String(a.meta.created_at).localeCompare(String(b.meta.created_at)));
   for (const scan of scans) scan.progress = data.scanStates[scan.meta.task_id] || { status: scan.meta.task?.status || scan.meta.status };
   const operations = paths.filter(p => /^(?:logs\/[^/]+(?:\/attempts\/[^/]+)?|prove\/sessions\/[^/]+\/(?:proof|validation|run)-\d+)\/result\.json$/.test(p))
-    .map(p => ({ path: p, evidence: json(p), request: json(p.replace(/result.json$/, 'request.json')) })).filter(o => o.evidence?.task && o.evidence.operation !== 'scan');
+    .map(p => ({ path: p, evidence: json(p), request: json(p.replace(/result.json$/, 'request.json')) })).filter(o => o.evidence?.task && !['scan', 'deepscan'].includes(o.evidence.operation));
   const targets = [...new Set(paths.filter(p => /^(?:prove\/(?!sessions\/)|logs\/[^/]+\/artifacts\/|source\/)/.test(p) && /\/(PROOF|SCOPE)\.md$/.test(p)).map(p => p.slice(0, p.lastIndexOf('/') + 1)))];
   const active = [];
   for (const s of scans) {
@@ -190,12 +195,12 @@ function scansPage(r) {
       + ((report.excluded_findings || []).length ? `<div class="card card-body"><h2>Excluded findings</h2>${report.excluded_findings.map(c => `<p style="margin-top:12px"><strong>${escape(c.title)}</strong> — ${escape(c.reason)}</p>`).join('')}</div>` : '')
       + `<div class="card card-body"><h2>Coverage</h2><dl class="kv"><dt>Files / bytes</dt><dd>${escape(coverage.file_count)} files · ${escape(coverage.bytes)} bytes</dd><dt>Checked</dt><dd>${list(coverage.checked)}</dd><dt>Not checked</dt><dd>${list(coverage.not_checked)}</dd><dt>Limitations</dt><dd>${list(coverage.notes)}</dd></dl></div>`;
   }
-  const requestPath = scan.path.replace(/artifacts\/meta.json$/, 'request.json');
+  const requestPath = scan.path.replace(/(?:artifacts\/meta|result)\.json$/, 'request.json');
   return heading('Scan', `${human(meta.depth)} review · ${meta.scope || 'whole repository'} · findings are not reproduced or formally proved · ${requirementState(requestPath)}`, scanOutcome(scan) + status(data.freshness[requestPath] || 'unknown') + serviceLink(meta.url)) + select
     + `<div class="row small mono muted" style="margin-bottom:15px">${escape(meta.task_id)} ${status(meta.report?.status)}</div><div class="tabs"><button data-scan-tab="report" class="${state.scanTab === 'report' ? 'active' : ''}">Report</button><button data-scan-tab="metadata" class="${state.scanTab === 'metadata' ? 'active' : ''}">Scan metadata</button></div><div class="stack">${body}</div>`;
 }
 function operationsView(r) {
-  const files = r.paths.filter(p => /^logs\/[^/]+(?:\/attempts\/[^/]+)?\/request.json$/.test(p) && json(p)?.operation !== 'scan');
+  const files = r.paths.filter(p => /^logs\/[^/]+(?:\/attempts\/[^/]+)?\/request.json$/.test(p) && !['scan', 'deepscan'].includes(json(p)?.operation));
   if (!r.operations.length && !files.length) return empty('No verification runs', 'Run, validation and proof results appear here.');
   return `<div class="stack">${r.operations.map(o => {
     const task = o.evidence.task;

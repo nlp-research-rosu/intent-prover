@@ -396,7 +396,7 @@ fn collect_one(scan: &mut Value, data: &Path, api: &Api) -> Result<String> {
     }
     save(data, scan)?;
     store::metadata(scan, Some(&response.body), api)?;
-    lines.push(format!("Local HTML report: from the repository root, run {} view --output <new-file.html>. Present that HTML link first; open it at #view=scans&scan=logs%2F{operation_id}%2Fartifacts%2Fmeta.json. The remote job link is inside.",channel::settings().cli));
+    lines.push(format!("Local HTML report: from the repository root, run {} view --output <new-file.html>. Present that HTML link first; open it at #view=scans&scan=logs%2F{operation_id}%2Fresult.json. The remote job link is inside.",channel::settings().cli));
     let result = lines.join("\n");
     ensure!(scan["status"] == "done", "{result}");
     Ok(result)

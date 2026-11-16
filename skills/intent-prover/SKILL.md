@@ -66,7 +66,7 @@ Check export succeeded and the HTML contains the intended result. Present **one
 local HTML link first**, with a brief outcome, checked scope and important
 limitations—not a list of JSON/Markdown files or a remote-console login link.
 Open the relevant section by appending a hash to that link (URL-encode paths):
-`#view=scans&scan=logs%2F<operation-id>%2Fartifacts%2Fmeta.json` or
+`#view=scans&scan=logs%2F<operation-id>%2Fresult.json` or
 `#view=proofs&proof=logs%2F<log-id>%2Fartifacts%2F&proofTab=report`.
 
 The HTML reads saved evidence without network access or sign-in. It includes

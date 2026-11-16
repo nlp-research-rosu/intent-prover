@@ -17,7 +17,7 @@ pub(super) fn prepare(root: &Path, id: Option<&str>) -> Result<PathBuf> {
     );
     let base = crate::storage::initialize(root)?;
     let dir = match id {
-        Some(id) => base.join("logs").join(id).join("artifacts"),
+        Some(id) => base.join("logs").join(id),
         None => base.join("logs"),
     };
     crate::storage::safe_parent(root, &dir)?;
@@ -37,15 +37,12 @@ pub(super) fn metadata(scan: &Value, task: Option<&Value>, api: &Api) -> Result<
         Path::new(string(&scan["repo_root"])),
         Some(string(&scan["operation_id"])),
     )?;
-    let previous = read(&dir.join("meta.json"));
-    let saved_task = task.cloned().unwrap_or_else(|| {
-        read(
-            &dir.parent()
-                .expect("Scan artifacts have an operation directory")
-                .join("result.json"),
-        )["task"]
-            .clone()
-    });
+    let previous = read(&dir.join("result.json"));
+    let previous = if previous["scan"].is_object() {
+        previous["scan"].clone()
+    } else {
+        previous
+    };
     let task = task.map(|task| {
         let reference = &task["result"]["report"];
         let report = if reference.is_null() { Value::Null } else {
@@ -62,7 +59,9 @@ pub(super) fn metadata(scan: &Value, task: Option<&Value>, api: &Api) -> Result<
         })
     }).unwrap_or_else(|| previous["task"].clone());
     let mut meta = json!({
-        "version":1, "task_id":scan["job_id"], "url":scan["url"],
+        "version":1, "operation":"scan",
+        "evidence_level":if scan["status"] == "done" { "llm_reviewed" } else { "unchecked" },
+        "task_id":scan["job_id"], "url":scan["url"],
         "api_url":scan["api_url"].as_str().unwrap_or(&api.config.server_url),
         "created_at":scan["created_at"], "updated_at":now(), "depth":scan["depth"],
         "scope":scan["scope"], "source":scan.get("source").unwrap_or(&previous["source"]),
@@ -77,24 +76,19 @@ pub(super) fn metadata(scan: &Value, task: Option<&Value>, api: &Api) -> Result<
             meta["report"] = json!({"status":scan["report_status"],"reason":scan["report_error"].as_str().or(scan["error"]["code"].as_str()).unwrap_or(string(&scan["status"]))});
         }
     }
-    write_json(&dir.join("meta.json"), &meta, false)?;
-    let result = dir
-        .parent()
-        .expect("Scan artifacts have an operation directory")
-        .join("result.json");
+    let result = dir.join("result.json");
     crate::storage::safe_parent(Path::new(string(&scan["repo_root"])), &result)?;
-    write_json(
-        &result,
-        &json!({"operation":"scan","task":saved_task,"scan":meta,"reportUrl":scan["url"]}),
-        false,
-    )?;
+    write_json(&result, &meta, false)?;
     Ok((dir, meta))
 }
 
 pub(super) fn report(scan: &Value, task: &Value, api: &Api) -> Result<Value> {
     let (dir, mut meta) = metadata(scan, Some(task), api)?;
+    let artifacts = dir.join("artifacts");
+    crate::storage::safe_parent(Path::new(string(&scan["repo_root"])), &artifacts)?;
+    fs::create_dir_all(&artifacts)?;
     let reference = &task["result"]["report"];
-    let saved = fs::read(dir.join("report.json")).ok();
+    let saved = fs::read(artifacts.join("report.json")).ok();
     if saved.as_ref().is_some_and(|bytes| {
         Some(bytes.len() as u64) == reference["size"].as_u64() && hash(bytes) == reference["sha256"]
     }) {
@@ -102,7 +96,7 @@ pub(super) fn report(scan: &Value, task: &Value, api: &Api) -> Result<Value> {
     } else {
         let result = api.report(task);
         if result.status == 200 {
-            write(&dir.join("report.json"), &result.bytes, false)?;
+            write(&artifacts.join("report.json"), &result.bytes, false)?;
             meta["report"] = json!({"status":"saved","size":reference["size"],"sha256":reference["sha256"],"saved_at":now()});
         } else {
             let status = if result.status == 410 {
@@ -115,14 +109,7 @@ pub(super) fn report(scan: &Value, task: &Value, api: &Api) -> Result<Value> {
             meta["report"] = json!({"status":status,"reason":result.code()});
         }
     }
-    write_json(&dir.join("meta.json"), &meta, false)?;
-    write_json(
-        &dir.parent()
-            .expect("Scan artifacts have an operation directory")
-            .join("result.json"),
-        &json!({"operation":"scan","task":task,"scan":meta,"reportUrl":scan["url"]}),
-        false,
-    )?;
+    write_json(&dir.join("result.json"), &meta, false)?;
     Ok(meta["report"].clone())
 }
 
