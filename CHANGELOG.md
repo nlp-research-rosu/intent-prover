@@ -15,6 +15,7 @@ Maintainers: add a line under Unreleased in the same pull request as the change.
 
 ### Changed
 
+- Scan and diagnostics now run through the native CLI without Node.js, preserving explicit submission, interrupted-task recovery and local reports.
 - Plugin and skill installation tracks main or staging instead of a fixed release tag or commit. Plugin versions and CLI binaries remain part of GitHub releases.
 - Requested Scan and Prove workflows check for CLI updates before use, without repeating sign-in or checking on every command or poll.
 
