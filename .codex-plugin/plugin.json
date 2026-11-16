@@ -1,7 +1,7 @@
 {
-  "name": "intent",
-  "version": "1.3.0",
-  "description": "Intent Prover: code analysis and verification for AI coding assistants.",
+  "name": "intent-staging",
+  "version": "1.4.0-staging.1",
+  "description": "Intent Prover Staging: code analysis and verification for AI coding assistants.",
   "author": {
     "name": "Intent Computing"
   },
