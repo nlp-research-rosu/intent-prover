@@ -150,6 +150,9 @@ pub enum TaskCommand {
 
 #[derive(Args)]
 pub struct ProofArgs {
+    /// Declared source coverage, path or path::symbol. Dependencies are not targets.
+    #[arg(long)]
+    pub target: Vec<String>,
     /// Session ID; resolves the project and pinned semantics.
     #[arg(long)]
     pub session: Uuid,

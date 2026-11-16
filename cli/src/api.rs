@@ -26,6 +26,7 @@ pub struct Upload {
     fields: Vec<(&'static str, String)>,
     file: UploadFile,
     inputs: Vec<(String, Vec<u8>)>,
+    targets: Vec<Value>,
     requirements: Vec<Value>,
     specification_id: Option<String>,
 }
@@ -150,6 +151,7 @@ impl Api {
                 },
                 bytes,
             )],
+            targets: Vec::new(),
             requirements: Vec::new(),
             specification_id: None,
         })
@@ -186,6 +188,7 @@ impl Api {
             "attempt":match operation { "run" => session.runs_used + 1, "validate" => session.validations_used + 1, _ => session.attempts_used + 1 },
             "api_url":self.base,"requirements":upload.requirements,"spec_id":upload.specification_id,
             "upload_sha256":crate::storage::hash(&upload.file.bytes),"controls":controls,
+            "targets":upload.targets,
             "requirement_binding":{"version":1,"kind":"declared_association_not_uploaded","records":upload.requirements}
         });
         if session.log_id.is_some() {
@@ -302,6 +305,19 @@ impl Api {
     ) -> Result<Upload> {
         let proof_session = crate::session::load(args.session)?;
         let semantics = proof_session.semantics;
+        let mut targets = Vec::new();
+        for target in &args.target {
+            let (path, symbol) = target
+                .split_once("::")
+                .map_or((target.as_str(), None), |(p, s)| (p, Some(s)));
+            crate::requirements::relative_path(path)?;
+            anyhow::ensure!(
+                symbol.is_none_or(|s| !s.trim().is_empty() && !s.chars().any(char::is_control)),
+                "Invalid target symbol"
+            );
+            let (file, _) = inputs::resolve(&proof_session.project_root, Path::new(path))?;
+            targets.push(json!({"path":path,"symbol":symbol,"source_sha256":crate::storage::hash(fs::read(file)?)}));
+        }
         let docs = crate::requirements::documents(&proof_session.project_root)?;
         let mut requirements = Vec::new();
         for id in &args.requirement {
@@ -369,6 +385,7 @@ impl Api {
                 bytes: archive.finish()?.into_inner(),
             },
             inputs: files.into_iter().collect(),
+            targets,
             requirements,
             specification_id: args.spec_id,
         })

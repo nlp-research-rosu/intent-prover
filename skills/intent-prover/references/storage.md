@@ -42,6 +42,12 @@ Each associated submission allocates an independent spec bundle; `--spec-id`
 selects an existing bundle for update/sharing. Matching filenames do not choose
 a bundle. These local associations are not uploaded or claims of proof coverage.
 
+To record declared proof or validation source coverage, independently of requirements, use
+optional `--target <path>` or `--target <path>::<symbol>`, repeating it as needed.
+Paths are relative to the repository root. The local request records source hashes
+for freshness checks; targets are not uploaded, input dependencies or evidence
+that the proof covers that source.
+
 New sessions start directly in their log folder. Inputs and reports stay there,
 including unfinished work; retries edit the same inputs. No finalization, copying
 into logs or cleanup is needed. Attempts retain request/result metadata, submitted

@@ -332,6 +332,10 @@ Proof results and attempts:
   <workspaceDir>/attempts/<operation-id>/. The response includes the backend task unchanged,
   sessionId, budget (used, limit, remaining), evidenceDir and proofDir
   (<workspaceDir>/artifacts/), shared across attempts.
+  --target declares source coverage as a repository-relative path or path::symbol;
+  repeat it for multiple targets. The request records each source file's hash for
+  freshness checks. These local declarations are not uploaded, proof inputs or
+  evidence that the proof covers the declared source.
   --requirement associates local properties with submitted formal inputs.
   --spec-id explicitly selects an existing bundle; otherwise a new bundle is used.
   Associations stay local and do not establish proof coverage or freshness.

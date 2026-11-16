@@ -132,7 +132,8 @@ class Tests(unittest.TestCase):
                                        ("validate", "validation", "valid"),
                                        ("prove", "proof", "proved")):
             self.server.outcome = outcome
-            result = self.operation(command, extra=() if command == "run" else ("--requirement", requirement))
+            result = self.operation(command, extra=() if command == "run" else
+                                    ("--requirement", requirement, "--target", "program.mpy"))
             evidence = Path(result["evidenceDir"])
             self.assertEqual(evidence.parent, self.workspace / "attempts")
             self.assertRegex(evidence.name, r"^[a-z0-9]{6}$")
@@ -141,6 +142,10 @@ class Tests(unittest.TestCase):
             request = json.loads((evidence / "request.json").read_text())
             self.assertEqual(request["operation"], command)
             self.assertEqual(request["session_id"], self.session["sessionId"])
+            self.assertEqual(request["targets"], [] if command == "run" else [
+                {"path": "program.mpy", "symbol": None,
+                 "source_sha256": hashlib.sha256((self.root / "program.mpy").read_bytes()).hexdigest()},
+            ])
             for entry in request["inputs"]:
                 submitted = (self.root if entry.get("root") == "project" else self.root / ".intent") / entry["path"]
                 self.assertEqual(hashlib.sha256(submitted.read_bytes()).hexdigest(), entry["sha256"])
@@ -179,8 +184,19 @@ class Tests(unittest.TestCase):
 
     def test_report_link_retains_submission_console_when_waiting_and_exporting(self):
         self.env["INTENT_CONSOLE_URL"] = "https://staging-console.example.test/prover/"
-        result = self.operation("prove")
+        result = self.operation("prove", extra=("--target", "program.mpy",
+                                               "--target", "program.mpy::withdraw"))
         evidence = Path(result["evidenceDir"]) / "result.json"
+        request_path = evidence.with_name("request.json")
+        request = json.loads(request_path.read_text())
+        source_hash = hashlib.sha256((self.root / "program.mpy").read_bytes()).hexdigest()
+        self.assertEqual(request["targets"], [
+            {"path": "program.mpy", "symbol": None, "source_sha256": source_hash},
+            {"path": "program.mpy", "symbol": "withdraw", "source_sha256": source_hash},
+        ])
+        self.assertEqual(request["requirements"], [])
+        self.assertNotIn('name="target"', self.server.uploads[-1][1])
+        self.assertNotIn('name="targets"', self.server.uploads[-1][1])
         expected = f'https://staging-console.example.test/prover/tasks/{result["task"]["id"]}'
         self.assertEqual(json.loads(evidence.read_text())["reportUrl"], expected)
         self.env["INTENT_CONSOLE_URL"] = "https://production-console.example.test"
@@ -188,6 +204,7 @@ class Tests(unittest.TestCase):
                              "--session", self.session["sessionId"])
         self.assertEqual(recovered["task"], result["task"])
         self.assertEqual(json.loads(evidence.read_text())["reportUrl"], expected)
+        self.assertEqual(json.loads(request_path.read_text()), request)
 
         target = Path(result["proofDir"])
         (target / "PROOF.md").write_text("# Proof report\nSelected claims and assumptions.\n")
@@ -231,6 +248,16 @@ class Tests(unittest.TestCase):
         self.assertEqual(json.loads(files[legacy_path])["reportUrl"], legacy_url)
         self.assertFalse(any(path.startswith("prove/sessions/") and path != legacy_path
                              or "/inputs/" in path for path in files))
+        self.assertEqual(len(self.server.requests), requests)
+        request_relative = request_path.relative_to(self.root / ".intent").as_posix()
+        self.assertEqual(payload["snapshot"]["freshness"][request_relative], "current")
+        (self.root / "program.mpy").write_text("changed\n")
+        stale_output = self.base / "stale.html"
+        self.cli("view", "--output", str(stale_output),
+                 "--plugin-data", str(self.base / "no-plugin-data"))
+        stale_payload = json.loads(stale_output.read_text().split('<script type="application/json" id="data">', 1)[1]
+                                   .split('</script>', 1)[0])
+        self.assertEqual(stale_payload["snapshot"]["freshness"][request_relative], "stale")
         self.assertEqual(len(self.server.requests), requests)
         self.assertIn("Output already exists", self.cli("view", "--output", str(output), code=1)["message"])
 
@@ -327,6 +354,11 @@ class Tests(unittest.TestCase):
             result = self.cli("prove", "--session", self.session["sessionId"],
                               "--spec", path, "--spec-module", "OUTSIDE", code=1)
             self.assertIn("escapes session inputs", result["message"])
+        escaped = self.base / "outside.mpy"
+        escaped.write_text("pass\n")
+        (self.root / "escaped.mpy").symlink_to(escaped)
+        for target in ("../outside.mpy", "escaped.mpy", "program.mpy::"):
+            self.operation("prove", code=1, extra=("--target", target))
         self.assertEqual(self.server.uploads, [])
 
     def test_requirements_keep_one_owner_when_their_scope_changes(self):
