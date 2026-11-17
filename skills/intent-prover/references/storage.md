@@ -20,16 +20,11 @@ with source. Ordinary chats and edits do not trigger remote work.
       result.json
 ```
 
-`REQUIREMENTS.md` is editable project-wide human intent. Scan consumes that brief,
-structured requirements applicable to the selected source files and their selected
-current specifications. Attempt records and unrelated workspace files are not uploaded.
-
-Use the local `requirements` CLI to add/update/remove structured requirements;
-its help owns syntax. Input JSON contains `statement`, nonempty `targets` with
-repository-relative `path` and optional `symbol`, and optional `reason`. One-file
-requirements live beside that source's current specs. Cross-file requirements
-live in `source/requirements.json`; their first target owns the per-source index.
-Updates retain that owner while it remains a target. Read the files directly.
+For requirements authoring, the brief's skeleton and CLI examples, read
+[Formalize](formalize.md). One-file requirements live beside that source's current
+specs. Cross-file requirements live in `source/requirements.json`; their first
+target owns the per-source index. Updates retain that owner while it remains a
+target. Read the files directly.
 
 Each property has one index entry with `specs` (paths relative to `.intent`) and
 `last_run` (an operation ID or null). Properties can share a bundle or operation.

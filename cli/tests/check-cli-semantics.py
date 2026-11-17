@@ -379,6 +379,48 @@ class Tests(unittest.TestCase):
             self.operation("prove", code=1, extra=("--target", target))
         self.assertEqual(self.server.uploads, [])
 
+    def test_requirements_accept_inline_json_and_file_input(self):
+        content = {"statement": "The program preserves its caller's state.",
+                   "targets": [{"path": "program.mpy", "symbol": "main"}],
+                   "reason": "Assumption: no external state changes are intended."}
+        inline = self.cli("requirements", "add", "--json", json.dumps(content))["requirement"]
+        input_file = self.base / "requirement.json"
+        input_file.write_text(json.dumps(content))
+        from_file = self.cli("requirements", "add", "--input", str(input_file))["requirement"]
+        for record in (inline, from_file):
+            self.assertRegex(record["id"], r"^[a-z0-9]{6}$")
+            self.assertEqual({key: value for key, value in record.items() if key != "id"}, content)
+        self.assertNotEqual(inline["id"], from_file["id"])
+        content["statement"] = "The program preserves external state and produces no output."
+        updated = self.cli("requirements", "update", inline["id"],
+                           "--json", json.dumps(content))["requirement"]
+        self.assertEqual(updated, dict(content, id=inline["id"]))
+        self.assertEqual(self.cli("requirements", "show", inline["id"])["requirement"], updated)
+        owner = self.root / ".intent/source/program.mpy"
+        records = json.loads((owner / "requirements.json").read_text())["requirements"]
+        self.assertIn(updated, records)
+        self.assertEqual(set(json.loads((owner / "index.json").read_text())["properties"]),
+                         {inline["id"], from_file["id"]})
+        self.assertEqual(self.server.uploads, [])
+
+    def test_requirements_reject_invalid_or_ambiguous_input(self):
+        requirement = self.requirement()
+        file = self.root / ".intent/source/program.mpy/requirements.json"
+        before = file.read_bytes()
+        input_file = self.base / "requirement.json"
+        for command in (("add",), ("update", requirement)):
+            for options in ((), ("--input", str(input_file), "--json", "{}")):
+                result = subprocess.run([BINARY, "requirements", *command, *options],
+                                        cwd=self.cwd, env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("--input", result.stderr)
+                self.assertIn("--json", result.stderr)
+            for content in ("{", '{"statement":"Missing targets"}',
+                            '{"statement":"Bad target","targets":[{"path":"../outside.py"}]}'):
+                self.cli("requirements", *command, "--json", content, code=1)
+                self.assertEqual(file.read_bytes(), before)
+        self.assertEqual(self.server.uploads, [])
+
     def test_requirements_keep_one_owner_when_their_scope_changes(self):
         requirement = self.requirement()
         local = self.root / ".intent/source/program.mpy/requirements.json"

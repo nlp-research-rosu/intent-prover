@@ -46,6 +46,5 @@ report](../SKILL.md#deliver-results) using `intent-prover view --output <new-rep
 The saved remote job URL is a secondary link inside the viewer. State coverage
 and exclusions; Scan findings are not reproduced bugs or formal proofs.
 Offer to reproduce or fix; findings do not authorize edits. After a
-fix, another remote Scan requires an explicit request. Maintain confirmed project
-intent in `.intent/REQUIREMENTS.md` and source-specific structured requirements
-as described in [Project storage](storage.md).
+fix, another remote Scan requires an explicit request. For requirements changes,
+follow [Formalize](formalize.md).

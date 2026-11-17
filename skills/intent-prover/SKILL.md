@@ -1,6 +1,6 @@
 ---
 name: intent-prover
-description: Use for Intent Prover setup, explicitly requested Scan runs/results, formal proofs of program properties with K, or presenting saved results as local HTML.
+description: Use for Intent Prover setup, clarifying and recording requirements with Formalize, explicitly requested Scan runs/results, formal proofs of program properties with K, or presenting saved results as local HTML.
 ---
 
 # Intent Prover
@@ -16,10 +16,11 @@ permission to edit. Never read credentials into chat.
 | User needs | Read |
 |---|---|
 | Install, connect or resolve missing setup | [Onboarding](references/onboarding.md) |
+| Clarify intent, resolve ambiguity or maintain requirements | [Formalize](references/formalize.md) |
 | Submit a remote code scan or collect its results | [Scan](references/scan.md) |
 | Prove a property of a program with K | [Prove](references/prove.md) |
 | View or export saved results without remote work | [Deliver results](#deliver-results) |
-| Read or update local requirements and specification links | [Project storage](references/storage.md) |
+| Inspect storage, specification links or evidence freshness | [Project storage](references/storage.md) |
 
 Scan is not a prerequisite for Prove. Reuse completed setup; do not sign in,
 install updates, submit jobs or deliver old results on ordinary messages.

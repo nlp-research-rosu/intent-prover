@@ -1,6 +1,6 @@
 use crate::{CommandResult, api, session};
-use anyhow::{Context, Result, ensure};
-use clap::Subcommand;
+use anyhow::{Context, Result, bail, ensure};
+use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -20,19 +20,41 @@ pub enum Command {
     },
     /// Show a requirement by its stable ID.
     Show { id: String },
-    /// Add a requirement from JSON (statement, targets, optional reason); derive storage from targets.
+    /// Add a requirement from a JSON object; derive storage from its targets.
     Add {
-        #[arg(long)]
-        input: PathBuf,
+        #[command(flatten)]
+        input: Input,
     },
     /// Replace a requirement's content, retaining its ID and relocating it if targets change.
     Update {
         id: String,
-        #[arg(long)]
-        input: PathBuf,
+        #[command(flatten)]
+        input: Input,
     },
     /// Remove a requirement without removing saved operation evidence.
     Remove { id: String },
+}
+
+/// Requirement JSON supplied directly or read from a file.
+#[derive(Args)]
+#[group(required = true, multiple = false)]
+pub struct Input {
+    /// Read a JSON object with statement, targets and optional reason from a file.
+    #[arg(long, value_name = "FILE")]
+    input: Option<PathBuf>,
+    /// Supply a JSON object with statement, targets and optional reason directly.
+    #[arg(long, value_name = "JSON")]
+    json: Option<String>,
+}
+
+impl Input {
+    fn read(self) -> Result<Content> {
+        match (self.input, self.json) {
+            (Some(path), None) => Ok(serde_json::from_slice(&fs::read(path)?)?),
+            (None, Some(json)) => Ok(serde_json::from_str(&json)?),
+            _ => bail!("Expected exactly one of --input or --json"),
+        }
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -408,7 +430,7 @@ pub fn dispatch(command: Command) -> CommandResult {
             Ok((0, json!({"requirement":record})))
         }
         Command::Add { input } => {
-            let content: Content = serde_json::from_slice(&fs::read(input)?)?;
+            let content = input.read()?;
             validate(&content)?;
             validate_sources(&root, &content)?;
             let id = crate::storage::new_id(&root)?;
@@ -422,7 +444,7 @@ pub fn dispatch(command: Command) -> CommandResult {
                     .any(|(_, _, doc)| doc.requirements.iter().any(|r| r.id == id)),
                 "Unknown requirement ID"
             );
-            let content: Content = serde_json::from_slice(&fs::read(input)?)?;
+            let content = input.read()?;
             validate(&content)?;
             validate_sources(&root, &content)?;
             let record = Requirement::new(id.clone(), content);
