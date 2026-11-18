@@ -15,7 +15,7 @@
         "ref": "staging"
       },
       "description": "Intent Prover Staging: code analysis and verification for AI coding assistants.",
-      "version": "1.4.0-staging.1"
+      "version": "1.4.0-staging.2"
     }
   ]
 }
