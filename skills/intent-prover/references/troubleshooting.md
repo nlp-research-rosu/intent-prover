@@ -7,28 +7,31 @@ If the problem is that the agent cannot find the plugin or skill, start with
 
 ## Diagnose the CLI and connection
 
-Run `intent-prover doctor` in the agent's environment. It works outside a
-repository and does not require a loaded plugin. Use the matching CLI for the
-installed release channel; do not switch endpoints, credentials, or channels
-to make the check pass. Claude Code can also run `/intent:doctor` when the
-plugin is loaded.
+Run the command for the intended channel in the agent's own environment. It
+works outside a repository, even when the plugin is not loaded.
 
-If the executable is missing, off `PATH`, or too old to have `doctor`, follow
-[onboarding](onboarding.md) for CLI detection and installation or update. If
-testing a prerelease, use that channel's release and installer, not the latest
-stable installer. Verify the version from the agent's shell after installing.
+| Channel | Command | Installer if the command is missing or outdated |
+|---|---|---|
+| Production | `intent-prover doctor` | Use `install-intent-prover.sh` or `install-intent-prover.ps1` from the [latest stable release](https://github.com/nlp-research-rosu/intent-prover/releases/latest). |
+| Staging | `intent-prover-staging doctor` | Use `install-intent-prover-staging.sh` or `install-intent-prover-staging.ps1` from the intended `v…-staging.…` [prerelease](https://github.com/nlp-research-rosu/intent-prover/releases), not the stable installer. |
+
+Use [onboarding's CLI detection steps](onboarding.md#detect-the-cli) with the
+executable from the table. Follow the installer's `PATH` instructions and verify
+the version from the agent's shell. Use the same executable for `config` and
+`login`. Do not switch endpoints, credentials, or channels to make the check pass.
 
 Use the report to choose a fix:
 
 | Report | Next step |
 |---|---|
-| Invalid configuration or endpoint | Check the effective settings and endpoint overrides with `intent-prover config`. Correct only the setting responsible; don't replace the configuration. |
+| Invalid configuration or endpoint | Check the effective settings and endpoint overrides with the matching CLI's `config` command. Correct only the setting responsible; don't replace the configuration. |
 | Service reachable; no usable key | Check for a pending sign-in and reuse it. If sign-in is needed, follow [onboarding](onboarding.md#connect-to-intent-prover) and have the user complete browser approval. |
 | Rejected environment key | Correct or unset the named override in the agent's environment, then rerun `doctor`. Signing in will not override it. Never ask for the key in chat. |
 | Rejected saved key | Reconnect through onboarding. |
 | Saved credentials could not be read | Address the reported file problem first. On Unix, if the report says others can read the credentials file, set that file's mode to `600`. Do not read, print, or delete the file to diagnose it. |
 | Account not approved | Give the user the application link. Reinstalling or repeating sign-in does not grant approval. |
-| Client update required | Follow onboarding for the CLI update. Updating the plugin or skill does not update the executable. |
+| Too many failed authentication attempts | Wait as directed by `doctor`, then verify the credential source before trying again. Do not retry or start sign-in while throttled. |
+| Client update required | Use the matching release installer above. Updating the plugin or skill does not update the executable. |
 | Health or account request failed | Check the intended endpoint and the agent's network permissions. If a permitted check still fails, or health passes but account access remains unresolved, contact support. Do not keep retrying sign-in or reinstalling. |
 
 Rerun `doctor` after a fix. `Account: key accepted` verifies the connection and

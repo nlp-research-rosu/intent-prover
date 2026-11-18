@@ -527,6 +527,22 @@ pub(crate) fn doctor(args: PluginArgs) -> Result<(i32, String)> {
             ),
             401 => (false, true, format!("key rejected; run {cli} login")),
             403 if reply.code() == "ACCESS_NOT_APPROVED" => (false, true, api.not_approved()),
+            429 if reply.code() == "TOO_MANY_FAILED_AUTHENTICATIONS" => {
+                let wait = match reply.retry_after {
+                    Some(seconds) => format!(
+                        "wait {:.0} seconds before rerunning doctor",
+                        seconds.ceil().max(1.0)
+                    ),
+                    None => "wait before rerunning doctor".into(),
+                };
+                (
+                    false,
+                    true,
+                    format!(
+                        "too many failed authentication attempts (HTTP 429, TOO_MANY_FAILED_AUTHENTICATIONS); {wait}"
+                    ),
+                )
+            }
             426 => (
                 false,
                 true,
