@@ -1,6 +1,6 @@
 ---
 name: intent-prover
-description: Use for Intent Prover setup, clarifying and recording requirements with Formalize, explicitly requested Scan runs/results, formal proofs of program properties with K, or presenting saved results as local HTML.
+description: Use for Intent Prover setup and troubleshooting (doctor, connection failures, or a missing plugin or skill), clarifying and recording requirements with Formalize, explicitly requested Scan runs/results, formal proofs of program properties with K, or presenting saved results as local HTML.
 ---
 
 # Intent Prover
@@ -15,7 +15,8 @@ permission to edit. Never read credentials into chat.
 
 | User needs | Read |
 |---|---|
-| Install, connect or resolve missing setup | [Onboarding](references/onboarding.md) |
+| Install or connect for the first time | [Onboarding](references/onboarding.md) |
+| Diagnose a connection, missing command, or plugin/skill that won't load | [Troubleshooting](references/troubleshooting.md) |
 | Clarify intent, resolve ambiguity or maintain requirements | [Formalize](references/formalize.md) |
 | Submit a remote code scan or collect its results | [Scan](references/scan.md) |
 | Prove a property of a program with K | [Prove](references/prove.md) |
@@ -33,7 +34,7 @@ workflow, not before every command or poll. Reuse saved sign-in.
 
 Claude Code: `/intent:scan [file or folder] [fast|balanced|full]`, `/intent:scan collect [task-id]`, `/intent:prove`, `/intent:doctor`.
 
-For Scan and diagnostics, run:
+For Scan, run:
 
     intent-prover <subcommand> --data "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}"
 
@@ -44,7 +45,7 @@ Codex has no plugin slash commands. Use the path relative to this skill:
 Antigravity has no plugin commands either; this skill is
 `/intent:intent-prover`. Use the same relative path with `--host antigravity`.
 
-These commands may need permission for network access and writing plugin data
+Scan may need permission for network access and writing plugin data
 outside the sandbox. Scan, diagnostics, Prove and login all use the global
 `intent-prover` CLI on `PATH`; Node.js is not needed. Its executable help owns
 command syntax. The plugin-root option only locates existing Scan recovery data.
@@ -77,7 +78,3 @@ Keep raw files for agent analysis, not as the default user handoff. If export is
 unavailable, explain why and provide the saved evidence instead; do not invent a
 report link or sign in just to view local results. Use `intent-prover view` for an
 ongoing live session only; never hand off a localhost URL after stopping its server.
-
-## Setup and diagnostics
-
-Run `doctor` for connection or configuration problems. It reports status without deleting credentials, starting login or updating the plugin. `INTENT_DISABLED=1` or `DO_NOT_TRACK=1` blocks plugin Scan commands.

@@ -68,6 +68,9 @@ export function createFakeProver(opts = {}) {
       st.requests.push({ method: req.method, path: url.pathname, headers: req.headers, body });
       const authed = req.headers.authorization === `Bearer ${st.key}` && !st.keyRevoked;
 
+      if (req.method === "GET" && url.pathname === "/healthz") {
+        return json(res, st.healthStatus || 200, { status: "ok" });
+      }
       if (req.method === "POST" && url.pathname === "/_control") {
         Object.assign(st, body || {});
         return json(res, 200, { ok: true });
@@ -135,6 +138,7 @@ export function createFakeProver(opts = {}) {
       }
       if (req.method === "GET" && url.pathname === "/tasks") {
         if (!authed) return json(res, 401, ERR.unauthorized);
+        if (st.accountNotApproved) return json(res, 403, { code: "ACCESS_NOT_APPROVED" });
         if (st.tasksStatus) return json(res, st.tasksStatus, { code: "INTERNAL_ERROR", message: "x" });
         return json(res, 200, { tasks: [], hasMore: false });
       }

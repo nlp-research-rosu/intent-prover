@@ -9,7 +9,7 @@ mod support;
 use crate::{auth, channel, config};
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, ValueEnum};
-use http::Api;
+use http::{Api, Reply};
 use serde_json::{Value, json};
 use std::{
     env, fs,
@@ -166,7 +166,7 @@ fn access(config: config::Config) -> Result<Api> {
         bail!("{reason}=1 is set; remove it to use plugin Scan commands.");
     }
     let key = auth::api_key(&config.server_url).ok().flatten().filter(|k| !k.is_empty()).with_context(|| format!("Not connected. Use onboarding to install the global CLI if needed, then run {} login.", channel::settings().cli))?;
-    Api::new(config, key)
+    Api::new(config, Some(key))
 }
 fn record_file(data: &Path, id: &str) -> Result<PathBuf> {
     ensure!(valid_id(id), "Invalid Scan task ID");
@@ -460,29 +460,50 @@ fn collect(id: Option<&str>, cwd: &Path, data: &Path, config: config::Config) ->
     Ok(result)
 }
 
-pub(crate) fn doctor(args: PluginArgs) -> Result<String> {
-    let config = config::load()?;
+// Report only local classifications and HTTP status, not response bodies or raw
+// transport errors, which can contain data that should not be shared.
+fn probe_failure(reply: &Reply) -> String {
+    match (reply.status, reply.code().as_str()) {
+        (0, "timeout") => "request timed out".into(),
+        (0, "network") => "network request failed".into(),
+        (0, _) => "invalid response".into(),
+        (200, _) => "unexpected response (HTTP 200)".into(),
+        (status, _) => format!("HTTP {status}"),
+    }
+}
+
+fn check_doctor_url(value: &str, label: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value)
+        .ok()
+        .filter(|url| url.host_str().is_some())
+        .with_context(|| format!("Invalid {label} URL; check the configured endpoint"))?;
+    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    ensure!(
+        (url.scheme() == "https" || (url.scheme() == "http" && local))
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "{label} URL must use HTTPS (or HTTP on localhost) without credentials, query or fragment"
+    );
+    Ok(())
+}
+
+pub(crate) fn doctor(args: PluginArgs) -> Result<(i32, String)> {
+    const PROBE_TIMEOUT_MS: u64 = 3000;
+    let cli = channel::settings().cli;
+    let config = config::load()
+        .with_context(|| format!("Could not load configuration; check it with {cli} config"))?;
+    check_doctor_url(&config.server_url, "Service")?;
+    check_doctor_url(&config.portal_url, "Console")?;
+
     let key = auth::api_key(&config.server_url);
     let problem = key.as_ref().err().map(ToString::to_string);
-    let key = key.ok().flatten();
-    let env_key = env::var(channel::env_name("API_KEY")).is_ok_and(|s| !s.trim().is_empty());
-    let account = if let Some(key) = key.as_ref() {
-        let api = Api::new(config.clone(), key.clone())?;
-        let response = api.request("/tasks?limit=1", None, None, 3000, false);
-        if response.status == 200 {
-            "key accepted".into()
-        } else if response.status == 401 {
-            format!("key rejected; run {} login", channel::settings().cli)
-        } else if response.code() == "ACCESS_NOT_APPROVED" {
-            api.not_approved()
-        } else {
-            "could not reach the service".into()
-        }
-    } else {
-        format!("not connected; run {} login", channel::settings().cli)
-    };
+    let key = key.ok().flatten().filter(|key| !key.trim().is_empty());
+    let key_var = channel::env_name("API_KEY");
+    let env_key = env::var(&key_var).is_ok_and(|s| !s.trim().is_empty());
     let source = if env_key {
-        channel::env_name("API_KEY")
+        key_var.clone()
     } else if key.is_some() {
         config::directory()?
             .join("credentials.json")
@@ -491,6 +512,51 @@ pub(crate) fn doctor(args: PluginArgs) -> Result<String> {
     } else {
         "none".into()
     };
+
+    let (accepted, reached, account) = if let Some(key) = key {
+        let api = Api::new(config.clone(), Some(key))?;
+        let reply = api.request("/tasks?limit=1", None, None, PROBE_TIMEOUT_MS, false);
+        match reply.status {
+            200 if reply.body["tasks"].is_array() && reply.body["hasMore"].is_boolean() => {
+                (true, true, "key accepted".into())
+            }
+            401 if env_key => (
+                false,
+                true,
+                format!("key rejected; correct or unset {key_var}, then rerun doctor"),
+            ),
+            401 => (false, true, format!("key rejected; run {cli} login")),
+            403 if reply.code() == "ACCESS_NOT_APPROVED" => (false, true, api.not_approved()),
+            426 => (
+                false,
+                true,
+                "client update required (HTTP 426); update the CLI, then rerun doctor".into(),
+            ),
+            _ => (
+                false,
+                false,
+                format!("could not check account access ({})", probe_failure(&reply)),
+            ),
+        }
+    } else if problem.is_some() {
+        (false, false, "could not read saved credentials".into())
+    } else {
+        (false, false, format!("not connected; run {cli} login"))
+    };
+    let connection = if reached {
+        "reachable (account endpoint responded)".into()
+    } else {
+        let api = Api::new(config.clone(), None)?;
+        let reply = api.request("/healthz", None, None, PROBE_TIMEOUT_MS, false);
+        if reply.status == 200 && reply.body["status"] == "ok" {
+            "service health check passed".into()
+        } else {
+            format!("service health check failed ({})", probe_failure(&reply))
+        }
+    };
+    let scan_path = data_dir(&args)
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unavailable".into());
     let mut lines = vec![
         format!(
             "{} v{}: explicit Scan and Prove",
@@ -498,21 +564,16 @@ pub(crate) fn doctor(args: PluginArgs) -> Result<String> {
             env!("CARGO_PKG_VERSION")
         ),
         format!("Service: {}", config.server_url),
+        format!("Connection: {connection}"),
         format!("Account: {account}"),
         format!("Key source: {source}"),
-        format!("Local Scan state: {}", data_dir(&args)?.display()),
-        "Automatic hooks and reviews: none".into(),
+        format!("Local Scan state (not verified): {scan_path}"),
     ];
     if let Some(reason) = disabled() {
-        lines.push(format!(
-            "{reason}=1 blocks plugin Scan commands. Remove it before scanning."
-        ));
+        lines.push(format!("Warning: {reason}=1 blocks plugin Scan commands."));
     }
     if let Some(problem) = problem {
         lines.push(format!("Credentials: {problem}"));
     }
-    lines.push(
-        "Scan commands wait for results. Resume an interrupted Scan: scan collect [task-id]".into(),
-    );
-    Ok(lines.join("\n"))
+    Ok((i32::from(!accepted), lines.join("\n")))
 }
