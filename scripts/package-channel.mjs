@@ -59,8 +59,7 @@ export function prepareChannel(name, version, root = ROOT) {
     for (const entry of fs.readdirSync(path.join(root, directory), { withFileTypes: true })) {
       const file = `${directory}/${entry.name}`;
       if (entry.isDirectory()) renderDirectory(file);
-      // Troubleshooting names both channels explicitly, even in a packaged release.
-      else if (entry.name.endsWith(".md") && entry.name !== "troubleshooting.md") write(root, file, render(read(root, file)));
+      else if (entry.name.endsWith(".md")) write(root, file, render(read(root, file)));
     }
   };
   renderDirectory(skill);
