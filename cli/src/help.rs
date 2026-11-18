@@ -55,6 +55,14 @@ and snapshot metadata. They do not select the service or distribution channel.
 Authentication and API/console settings use this CLI's channel configuration.
 INTENT_DISABLED=1 and DO_NOT_TRACK=1 prevent Scan submissions and collection."#;
 
+pub const DOCTOR: &str = r#"Checks the configured service and whether it accepts the current credential.
+If account access cannot establish reachability, checks service health without
+sending a credential. Prints a readable report and exits 0 if account access
+passes, or 1 otherwise. Scan opt-outs are warnings, not connection failures.
+
+No repository or loaded plugin is required. The Scan recovery path is informational.
+Does not verify skill visibility, change settings, start sign-in or submit work."#;
+
 pub const LOGIN: &str = r#"Give the user the returned verification_url.
 The link includes the connection code. The user signs in and approves the machine.
 The command keeps running, collects the API key, saves it without printing it,

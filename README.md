@@ -45,9 +45,14 @@ Restart Claude Code or run `/reload-plugins`. Use the Intent Prover skill's onbo
 | `/intent:scan [file or folder] [fast\|balanced\|full]` | Submit a Scan, wait for completion, save evidence and return findings. |
 | `/intent:scan collect [task-id]` | Resume an interrupted Scan without submitting source. No ID: outstanding scans in this project. |
 | `/intent:prove [what to prove]` | Formal proof with K through the global CLI. |
-| `/intent:doctor` | Read connection/configuration diagnostics; does not log in, clear credentials or update the plugin. |
+| `/intent:doctor` | Show the CLI's connection and account diagnostics. |
 
 On Codex, ask the agent to invoke the corresponding skill. On Antigravity, the skill is `/intent:intent-prover`. Scan, diagnostics, Prove and login use the global `intent-prover` CLI. Network access and plugin-data writes may need sandbox approval.
+
+Run `intent-prover doctor` from a terminal even when the plugin is not loaded.
+It does not change settings or start sign-in. It exits successfully only when
+account access passes. See [Troubleshooting](skills/intent-prover/references/troubleshooting.md)
+for recovery steps.
 
 ## Signing in
 

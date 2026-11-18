@@ -4,7 +4,7 @@ use anyhow::Result;
 use reqwest::{Url, blocking::Client, redirect::Policy};
 use serde_json::{Value, json};
 use std::{
-    io::Read,
+    io::{ErrorKind, Read},
     time::{Duration, Instant},
 };
 
@@ -12,7 +12,7 @@ const MAX_BODY: u64 = 8 * 1024 * 1024;
 pub(super) struct Api {
     pub config: Config,
     http: Client,
-    key: String,
+    key: Option<String>,
 }
 pub(super) struct Reply {
     pub status: u16,
@@ -54,7 +54,7 @@ impl Reply {
     }
 }
 impl Api {
-    pub fn new(config: Config, key: String) -> Result<Self> {
+    pub fn new(config: Config, key: Option<String>) -> Result<Self> {
         Ok(Self {
             config,
             key,
@@ -92,8 +92,10 @@ impl Api {
             .header(
                 "user-agent",
                 concat!("intent-plugin/", env!("CARGO_PKG_VERSION")),
-            )
-            .bearer_auth(&self.key);
+            );
+        if let Some(key) = &self.key {
+            request = request.bearer_auth(key);
+        }
         if let Ok(pipe) = std::env::var("INTENT_PIPELINE")
             && ["llm", "canned"].contains(&pipe.as_str())
         {
@@ -150,8 +152,13 @@ impl Api {
             .and_then(|s| s.parse::<f64>().ok())
             .filter(|n| n.is_finite() && *n >= 0.);
         let mut bytes = Vec::new();
-        if response.take(MAX_BODY + 1).read_to_end(&mut bytes).is_err() {
-            return Reply::failure("network");
+        if let Err(error) = response.take(MAX_BODY + 1).read_to_end(&mut bytes) {
+            let timed_out = error.kind() == ErrorKind::TimedOut
+                || error
+                    .get_ref()
+                    .and_then(|cause| cause.downcast_ref::<reqwest::Error>())
+                    .is_some_and(reqwest::Error::is_timeout);
+            return Reply::failure(if timed_out { "timeout" } else { "network" });
         }
         if bytes.len() as u64 > MAX_BODY {
             return Reply::failure("too_large");

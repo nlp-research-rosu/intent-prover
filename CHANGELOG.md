@@ -9,6 +9,7 @@ Maintainers: add a line under Unreleased in the same pull request as the change.
 ### Changed
 
 - Scan and diagnostics now run through the native CLI without Node.js, preserving explicit submission, interrupted-task recovery and local reports.
+- `doctor` distinguishes service health from account access, returns a failing exit status for connection or account problems, and refers users to the appropriate next step. The Intent Prover skill includes recovery guidance for missing commands and plugins or skills that do not load.
 - Organize current requirements/specifications under `.intent/source/` and Scan/Prove evidence under `.intent/logs/`. Add local requirement management and optional formal-input associations; retain existing evidence without automatic migration.
 
 ## [1.3.0] - 2026-11-16

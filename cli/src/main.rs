@@ -32,7 +32,8 @@ enum Command {
     /// Submit a repository Scan, wait for findings, or collect an interrupted task.
     #[command(after_help = help::SCAN)]
     Scan(scan::ScanArgs),
-    /// Show plugin Scan configuration and check the saved credential.
+    /// Diagnose the connection to Intent Prover and check account access.
+    #[command(after_help = help::DOCTOR)]
     Doctor(scan::PluginArgs),
     /// Manage local requirements and their source-file associations.
     #[command(subcommand)]
@@ -224,18 +225,23 @@ pub type CommandResult = anyhow::Result<(i32, Value)>;
 fn main() {
     let cli = Cli::parse();
     if matches!(cli.command, Command::Scan(_) | Command::Doctor(_)) {
-        let result = (|| -> anyhow::Result<String> {
+        let result = (|| -> anyhow::Result<(i32, String)> {
             if let Some(project) = cli.project {
                 std::env::set_current_dir(session::project_root(&project)?)?;
             }
             match cli.command {
-                Command::Scan(args) => scan::run(args),
+                Command::Scan(args) => scan::run(args).map(|text| (0, text)),
                 Command::Doctor(args) => scan::doctor(args),
                 _ => unreachable!("text command was checked"),
             }
         })();
         match result {
-            Ok(text) => println!("{text}"),
+            Ok((exit, text)) => {
+                println!("{text}");
+                if exit != 0 {
+                    process::exit(exit);
+                }
+            }
             Err(error) => {
                 eprintln!("Intent Prover: {error}");
                 process::exit(1);
