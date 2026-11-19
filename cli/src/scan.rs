@@ -23,6 +23,9 @@ use support::{now, read, string, valid_id, write_json};
 pub(crate) struct ScanArgs {
     /// One file or folder and optional fast, balanced or full depth; or collect and an optional task ID.
     pub words: Vec<String>,
+    /// Check whether the selected upload includes requirements, without submitting.
+    #[arg(long)]
+    preflight: bool,
     #[command(flatten)]
     pub plugin: PluginArgs,
 }
@@ -181,13 +184,20 @@ fn merge(scan: &mut Value, progress: Value) {
     }
 }
 
+const NO_REQUIREMENTS: &str =
+    "No requirements will be uploaded for this scope. Use Formalize to add requirements.";
+
 pub(crate) fn run(args: ScanArgs) -> Result<String> {
     let cwd = env::current_dir()?;
-    let config = config::load()?;
-    let data = data_dir(&args.plugin)?;
     if args.words.first().is_some_and(|s| s == "collect") {
         ensure!(args.words.len() <= 2, "Use: scan collect [task-id]");
-        return collect(args.words.get(1).map(String::as_str), &cwd, &data, config);
+        ensure!(!args.preflight, "--preflight is only for new scans");
+        return collect(
+            args.words.get(1).map(String::as_str),
+            &cwd,
+            &data_dir(&args.plugin)?,
+            config::load()?,
+        );
     }
     if let Some(flag) = args.words.iter().find(|s| s.starts_with("--")) {
         let c = channel::settings();
@@ -218,7 +228,11 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
         return Ok("Intent Prover: give one file or folder at a time.".into());
     }
     let depth = depths.first().copied().unwrap_or_default();
-    let api = access(config)?;
+    let submission = if args.preflight {
+        None
+    } else {
+        Some((access(config::load()?)?, data_dir(&args.plugin)?))
+    };
     let snap = match snapshot::build(
         &cwd,
         targets.first().map(|s| s.as_str()),
@@ -227,6 +241,14 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
     ) {
         Ok(snap) => snap,
         Err(error) => return Ok(format!("Intent Prover: {error}")),
+    };
+    let Some((api, data)) = submission else {
+        let result = if snap.has_requirements {
+            "Requirements will be uploaded for this scope."
+        } else {
+            NO_REQUIREMENTS
+        };
+        return Ok(format!("Intent Prover: {result}"));
     };
     store::prepare(&snap.root, None)?;
     support::mkdir(&data, true)?;
@@ -246,6 +268,9 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
         .and_then(|s| s.to_str())
         .context("Missing Scan operation ID")?;
     let idem = uuid::Uuid::new_v4().simple().to_string();
+    if !snap.has_requirements {
+        eprintln!("Intent Prover: {NO_REQUIREMENTS}");
+    }
     let mut response = api.submit(&snap.gz, &idem);
     if response.status == 429
         && response.code() == "RATE_LIMITED"

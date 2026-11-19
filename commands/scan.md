@@ -9,7 +9,7 @@ The user requested: $ARGUMENTS
 First follow the Intent Prover skill's `references/onboarding.md#check-cli-updates`.
 Reuse saved sign-in; check once for this requested workflow, not on each poll.
 
-For a new Scan, tell the user before running it that a snapshot of the selected file, folder or repository will be uploaded to the configured Intent Prover service, with obvious secrets masked. It includes `.intent/REQUIREMENTS.md`, applicable structured requirements and their selected current specifications; other `.intent/` evidence and chat transcripts are not uploaded. Do not widen the requested source scope.
+For a new Scan, follow the Intent Prover skill's `references/scan.md#before-submitting`. Check the requested scope with `intent-prover scan --preflight` before the upload. Tell the user what will be uploaded and do not widen the requested scope.
 
 Run `intent-prover scan --data "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}"` from the project, adding the arguments:
 

@@ -32,6 +32,7 @@ pub(super) struct Snapshot {
     pub bytes: usize,
     pub redactions: u64,
     pub over: usize,
+    pub has_requirements: bool,
 }
 
 pub(super) fn canonical(path: &Path) -> std::io::Result<PathBuf> {
@@ -524,6 +525,7 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
         );
     }
     let mut source = meta;
+    let has_requirements = sources.iter().any(|file| file["role"] == "requirements");
     source["files"] = json!(sources);
     source["requirement_binding"] = binding;
     source["snapshot_sha256"] = json!(hash(&gz));
@@ -536,5 +538,6 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
         bytes,
         redactions,
         over,
+        has_requirements,
     })
 }
