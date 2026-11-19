@@ -4,9 +4,25 @@ Start with the [CLI update check](onboarding.md#check-cli-updates) once for this
 requested workflow. Reuse saved sign-in.
 
 Use the global native CLI as described in [Intent Prover](../SKILL.md#commands).
-Before submitting, explain that the requested code will be uploaded
-to the configured service, with obvious secrets masked. A generic local-review
-request is not permission to upload code; ask if remote analysis was not requested.
+
+## Before submitting
+
+For a new Scan, run `intent-prover scan --preflight` with the requested path
+and depth. This is a local check and does not require sign-in. Do not run it
+for `scan collect`.
+
+If preflight says no requirements will be uploaded, explain that inferred
+requirements can miss expected behavior or mistake intentional behavior for
+a bug. Offer to use [Formalize](formalize.md) first or to scan without supplied
+requirements. Wait for the user's choice unless they already asked to proceed
+without requirements. Do not adopt inferred requirements automatically.
+If the check cannot determine what would be uploaded, report the problem and
+do not submit. A direct CLI scan without `--preflight` does not pause.
+
+Before submitting, explain that the requested code will be uploaded to the
+configured service with obvious secrets masked. Mention that the upload can
+include applicable requirements and their selected specifications. A generic
+local-review request is not permission to upload code.
 
 ## Submit
 
