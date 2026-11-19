@@ -30,7 +30,8 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ matrix.node }}
-      - run: node --test test/*.test.js
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: npm test
   integration:
     uses: ./.github/workflows/integration.yml
   prepare:
@@ -99,8 +100,8 @@ jobs:
         include:
           - { runner: macos-15, platform: darwin-arm64, windows: false }
           - { runner: macos-15-intel, platform: darwin-x64, windows: false }
-          - { runner: ubuntu-latest, platform: linux-x64, windows: false }
-          - { runner: ubuntu-24.04-arm, platform: linux-arm64, windows: false }
+          - { runner: ubuntu-latest, platform: linux-x64, windows: false, docker_platform: linux/amd64 }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64, windows: false, docker_platform: linux/arm64 }
           - { runner: windows-latest, platform: windows-x64, windows: true }
           - { runner: windows-11-arm, platform: windows-arm64, windows: true }
     runs-on: ${{ matrix.runner }}
@@ -112,6 +113,8 @@ jobs:
       CLI: ${{ needs.prepare.outputs.cli }}
       V: ${{ needs.prepare.outputs.v }}
       ASSET: ${{ needs.prepare.outputs.cli }}-${{ matrix.platform }}
+      LINUX_BUILD_IMAGE: rust:bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea
+      LINUX_RUNTIME_IMAGE: debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -130,12 +133,33 @@ jobs:
           test "$(git rev-parse "v$V")" = "$RELEASE_SHA"
           git checkout --detach "$RELEASE_SHA"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: ${{ !matrix.docker_platform }}
       - run: cargo build --locked --release
+        if: ${{ !matrix.docker_platform }}
+      - name: Build Linux release on Debian 12
+        if: ${{ matrix.docker_platform }}
+        env:
+          DOCKER_PLATFORM: ${{ matrix.docker_platform }}
+        run: |
+          docker run --rm --platform "$DOCKER_PLATFORM" \
+            --user "$(id -u):$(id -g)" --env CARGO_HOME=/tmp/cargo \
+            --volume "$GITHUB_WORKSPACE:/src" --workdir /src/cli \
+            "$LINUX_BUILD_IMAGE" cargo build --locked --release
       - if: ${{ !matrix.windows }}
+        env:
+          DOCKER_PLATFORM: ${{ matrix.docker_platform }}
         shell: bash
         run: |
-          test "$("target/release/$CLI" --version)" = "$CLI $V"
           tar -C target/release -czf "$ASSET.tar.gz" "$CLI"
+          if [ -n "$DOCKER_PLATFORM" ]; then
+            # Verify the packaged binary on the supported glibc baseline without build libraries.
+            version=$(docker run --rm --platform "$DOCKER_PLATFORM" --network none \
+              --volume "$PWD/$ASSET.tar.gz:/release.tar.gz:ro" --env CLI \
+              "$LINUX_RUNTIME_IMAGE" sh -ec 'tar -xzf /release.tar.gz -C /tmp; "/tmp/$CLI" --version')
+          else
+            version=$("target/release/$CLI" --version)
+          fi
+          test "$version" = "$CLI $V"
           if command -v sha256sum >/dev/null; then
             sha256sum "$ASSET.tar.gz" > "$ASSET.tar.gz.sha256"
           else

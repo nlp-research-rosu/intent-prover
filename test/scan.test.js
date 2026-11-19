@@ -3,13 +3,12 @@ import { test, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 import { createFakeProver, TEST_KEY } from "./helpers/fake-prover.js";
 import { tmpdir, makeRepo, baseEnv, saveKey, BIN, symlink, SKIP_FILE_SYMLINKS } from "./helpers/env.js";
 import { validateScan } from "./helpers/schema.js";
-import { buildSnapshot } from "../lib/snapshot.js";
-import { renderScan } from "../lib/scan.js";
 
 let fp;
 before(async () => { fp = createFakeProver(); await fp.listen(); });
@@ -25,9 +24,10 @@ function setup({ key = true } = {}) {
 const write = (repo, rel, text) => { fs.mkdirSync(path.dirname(path.join(repo, rel)), { recursive: true }); fs.writeFileSync(path.join(repo, rel), text); };
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const idOf = (text) => /\/tasks\/([0-9a-f-]{36})/.exec(text)[1];
+const reportDir = (ctx, id) => path.join(ctx.repo, ".intent", "logs", read(path.join(ctx.data, "scans", `${id}.json`)).operation_id, "artifacts");
 function cli(args, ctx, extraEnv = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [BIN, "scan", ...args], { cwd: ctx.cwd || ctx.repo, env: { ...ctx.env, ...extraEnv } });
+    const child = spawn(BIN, ["scan", ...args], { cwd: ctx.cwd || ctx.repo, env: { ...ctx.env, ...extraEnv } });
     let out = "";
     let err = "";
     child.stdout.on("data", (bytes) => { out += bytes; });
@@ -44,15 +44,20 @@ test("snapshot filters/redacts tracked and non-ignored untracked files, preservi
   write(ctx.repo, "node_modules/a.js", "vendored\n");
   write(ctx.repo, "package-lock.json", "{}\n");
   write(ctx.repo, "binary.dat", Buffer.from([0, 1, 2]));
-  write(ctx.repo, ".intent/NOTES.md", "- Intended behaviour.\n");
+  write(ctx.repo, ".intent/REQUIREMENTS.md", "- Intended behaviour.\n");
+  write(ctx.repo, ".intent/source/src/app.py/requirements.json", JSON.stringify({ schema_version: 1, requirements: [{ id: "abc123", statement: "Return one", targets: [{ path: "src/app.py" }] }] }));
+  write(ctx.repo, ".intent/source/src/app.py/index.json", JSON.stringify({ schema_version: 1, properties: { abc123: { specs: ["source/src/app.py/specs/def456/spec.k"], last_run: null } } }));
+  write(ctx.repo, ".intent/source/src/app.py/specs/def456/spec.k", "module SPEC endmodule\n");
+  write(ctx.repo, ".intent/private.md", "private evidence\n");
   write(ctx.repo, ".intent/prove/old/PROOF.md", "private evidence\n");
-  const snapshot = await buildSnapshot({ cwd: ctx.repo, depth: "fast" });
-  assert.equal(snapshot.ok, true);
-  const upload = JSON.parse(zlib.gunzipSync(snapshot.gz));
+  const result = await cli(["fast", "--host", "antigravity"], ctx);
+  assert.equal(result.code, 0, result.err);
+  const [upload] = fp.scanUploads();
   assert.deepEqual(validateScan(upload, "ScanUpload"), []);
-  assert.deepEqual(upload.files.map((file) => file.path), [".intent/NOTES.md", "README.md", "src/app.py", "src/secret.py"]);
+  assert.deepEqual(upload.files.map((file) => file.path), [".intent/REQUIREMENTS.md", ".intent/source/src/app.py/requirements.json", ".intent/source/src/app.py/specs/def456/spec.k", "README.md", "src/app.py", "src/secret.py"]);
   assert.ok(!JSON.stringify(upload.files).includes("abcdefghijklmnopqrstuvwxyz"));
   assert.equal(upload.depth, "fast");
+  assert.equal(upload.meta.host, "antigravity");
 });
 
 test("snapshot scope is literal, rejects outside paths and does not follow symlinks", { skip: SKIP_FILE_SYMLINKS }, async () => {
@@ -61,9 +66,11 @@ test("snapshot scope is literal, rejects outside paths and does not follow symli
   const outside = tmpdir();
   write(outside, "private.py", "private = 1\n");
   symlink(outside, path.join(ctx.repo, "link"));
-  assert.equal((await buildSnapshot({ cwd: ctx.repo, scope: "link" })).ok, false);
-  const snapshot = await buildSnapshot({ cwd: ctx.repo, scope: "src" });
-  assert.deepEqual(JSON.parse(zlib.gunzipSync(snapshot.gz)).files.map((file) => file.path), ["src/app.py"]);
+  assert.match((await cli(["link"], ctx)).out, /outside the repo/);
+  assert.equal(fp.scanUploads().length, 0);
+  const result = await cli(["src"], ctx);
+  assert.equal(result.code, 0, result.err);
+  assert.deepEqual(fp.scanUploads()[0].files.map((file) => file.path), ["src/app.py"]);
 });
 
 test("Scan from a subdirectory submits once and saves the report at the repository root", async () => {
@@ -80,18 +87,63 @@ test("Scan from a subdirectory submits once and saves the report at the reposito
   assert.match(result.out, /Scan finished/);
   assert.equal(read(record).report_status, "saved");
   assert.match(result.out, /Local HTML report:.*intent-prover view --output <new-file.html>/);
-  assert.ok(result.out.includes(`#view=scans&scan=${encodeURIComponent(`scan/${id}/meta.json`)}`));
+  const operation = read(record).operation_id;
+  assert.match(operation, /^[a-z0-9]{6}$/);
+  assert.ok(result.out.includes(`#view=scans&scan=${encodeURIComponent(`logs/${operation}/result.json`)}`));
   const collected = await cli(["collect", id], ctx);
   assert.equal(collected.code, 0, collected.err);
   assert.match(collected.out, /Scan finished/);
   assert.match(collected.out, /Local HTML report:/);
   assert.equal(read(record).report_status, "saved");
-  const reportDir = path.join(ctx.repo, ".intent", "scan", id);
-  assert.ok(read(path.join(reportDir, "report.json")).coverage);
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "saved");
+  const artifacts = reportDir(ctx, id);
+  assert.ok(read(path.join(artifacts, "report.json")).coverage);
+  const meta = read(path.join(artifacts, "..", "result.json"));
+  assert.equal(meta.operation, "scan");
+  assert.equal(meta.version, 1);
+  assert.equal(meta.evidence_level, "llm_reviewed");
+  assert.equal(meta.task_id, id);
+  assert.equal(meta.task.status, "completed");
+  assert.equal(meta.report.status, "saved");
+  assert.equal(fs.existsSync(path.join(artifacts, "meta.json")), false);
+  const request = read(path.join(artifacts, "..", "request.json"));
+  assert.equal(request.operation, "scan");
+  assert.equal(request.upload_sha256, meta.source.snapshot_sha256);
+  assert.equal(request.inputs.length, 1);
+  const snapshot = fs.readFileSync(path.join(ctx.repo, ".intent", request.inputs[0].path));
+  assert.equal(createHash("sha256").update(snapshot).digest("hex"), request.upload_sha256);
+  assert.equal(request.inputs[0].sha256, request.upload_sha256);
+  assert.deepEqual(JSON.parse(gunzipSync(snapshot)), fp.scanUploads()[0]);
   assert.equal(fs.existsSync(path.join(ctx.cwd, ".intent")), false);
   assert.equal(fp.scanUploads().length, 1);
   assert.match((await cli(["collect"], ctx)).out, /No uncollected scans/);
+
+  // Collection updates the canonical record without moving or deleting older evidence.
+  const oldMeta = path.join(artifacts, "meta.json");
+  fs.writeFileSync(oldMeta, JSON.stringify(meta));
+  const oldMetaBytes = fs.readFileSync(oldMeta);
+  fs.writeFileSync(path.join(artifacts, "..", "result.json"),
+    JSON.stringify({ operation: "scan", task: {}, scan: meta }));
+  assert.equal((await cli(["collect", id], ctx)).code, 0);
+  const updated = read(path.join(artifacts, "..", "result.json"));
+  assert.equal(updated.task_id, id);
+  assert.equal(updated.report.status, "saved");
+  assert.equal(updated.report.saved_at, meta.report.saved_at);
+  assert.deepEqual(fs.readFileSync(oldMeta), oldMetaBytes);
+
+  // Recovery of a pre-log record leaves its existing evidence untouched.
+  const old = path.join(ctx.repo, ".intent", "scan", id);
+  fs.mkdirSync(old, { recursive: true });
+  fs.copyFileSync(path.join(artifacts, "report.json"), path.join(old, "report.json"));
+  const oldBytes = fs.readFileSync(path.join(old, "report.json"));
+  const legacy = read(record);
+  delete legacy.operation_id;
+  fs.writeFileSync(record, JSON.stringify(legacy));
+  assert.equal((await cli(["collect", id], ctx)).code, 0);
+  assert.notEqual(read(record).operation_id, operation);
+  assert.equal(read(path.join(reportDir(ctx, id), "..", "request.json")).recovered_task, id);
+  assert.deepEqual(fs.readFileSync(path.join(old, "report.json")), oldBytes);
+  assert.ok(fs.existsSync(path.join(artifacts, "report.json")));
+  assert.equal(fp.scanUploads().length, 1);
 });
 
 test("corrupt reports are rejected without replacing a saved report", async () => {
@@ -99,35 +151,41 @@ test("corrupt reports are rejected without replacing a saved report", async () =
   fp.state.corruptArtifact = true;
   const result = await cli([], ctx);
   const id = idOf(result.out);
-  const reportDir = path.join(ctx.repo, ".intent", "scan", id);
-  const reportFile = path.join(reportDir, "report.json");
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "pending");
-  assert.equal(read(path.join(reportDir, "meta.json")).report.reason, "REPORT_HASH_MISMATCH");
+  const artifacts = reportDir(ctx, id);
+  const reportFile = path.join(artifacts, "report.json");
+  assert.equal(read(path.join(artifacts, "..", "result.json")).report.status, "pending");
+  assert.equal(read(path.join(artifacts, "..", "result.json")).report.reason, "REPORT_HASH_MISMATCH");
   assert.equal(fs.existsSync(reportFile), false);
 
   fp.state.corruptArtifact = false;
   const recovered = await cli(["collect", id], ctx);
   assert.equal(recovered.code, 0, recovered.err);
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "saved");
+  assert.equal(read(path.join(artifacts, "..", "result.json")).report.status, "saved");
   const saved = fs.readFileSync(reportFile);
 
   // A changed artifact reference forces a download instead of reusing the saved copy.
   fp.state.scan.summary = {
     counts: {}, cards: [], oneLiners: [],
-    report: { ...read(path.join(reportDir, "meta.json")).task.report, sha256: "0".repeat(64) },
+    report: { ...read(path.join(artifacts, "..", "result.json")).task.report, sha256: "0".repeat(64) },
   };
   fp.state.corruptArtifact = true;
   await cli(["collect", id], ctx);
-  assert.equal(read(path.join(reportDir, "meta.json")).report.status, "pending");
-  assert.equal(read(path.join(reportDir, "meta.json")).report.reason, "REPORT_HASH_MISMATCH");
+  assert.equal(read(path.join(artifacts, "..", "result.json")).report.status, "pending");
+  assert.equal(read(path.join(artifacts, "..", "result.json")).report.reason, "REPORT_HASH_MISMATCH");
   assert.deepEqual(fs.readFileSync(reportFile), saved);
   assert.equal(fp.scanUploads().length, 1);
 });
 
 test("an interrupted Scan keeps its task record and collect resumes without another upload", async () => {
   const ctx = setup();
+  const pluginRoot = path.join(ctx.data, ".gemini", "config", "plugins", "intent");
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  delete ctx.env.CLAUDE_PLUGIN_DATA;
+  delete ctx.env.PLUGIN_DATA;
+  const args = ["--host", "antigravity", "--plugin-root", pluginRoot];
+  const records = path.join(ctx.data, ".gemini", "config", "plugin-data", "intent", "scans");
   fp.state.scan.statuses = ["running"];
-  const child = spawn(process.execPath, [BIN, "scan"], { cwd: ctx.repo, env: ctx.env });
+  const child = spawn(BIN, ["scan", ...args], { cwd: ctx.repo, env: ctx.env });
   let err = "";
   let id;
   child.stderr.on("data", (bytes) => {
@@ -139,9 +197,10 @@ test("an interrupted Scan keeps its task record and collect resumes without anot
   });
   await new Promise((resolve) => child.on("close", resolve));
   assert.ok(id, err);
-  assert.ok(fs.existsSync(path.join(ctx.data, "scans", `${id}.json`)));
+  assert.ok(fs.existsSync(path.join(records, `${id}.json`)));
+  assert.equal(read(path.join(records, `${id}.json`)).host, "antigravity");
   fp.state.scan.statuses = ["done"];
-  const recovered = await cli(["collect", id], ctx);
+  const recovered = await cli(["collect", id, ...args], ctx);
   assert.equal(recovered.code, 0, recovered.err);
   assert.match(recovered.out, /Saved report/);
   assert.equal(fp.scanUploads().length, 1);
@@ -174,11 +233,16 @@ test("failed scans and malformed summaries do not claim clean results", async ()
   assert.equal(result.code, 1);
   assert.match(result.err, /could not finish/);
   const id = idOf(result.err);
+  const meta = read(path.join(reportDir(ctx, id), "..", "result.json"));
+  assert.equal(meta.status, "failed");
+  assert.equal(meta.evidence_level, "unchecked");
+  assert.equal(meta.report.status, "unavailable");
   const collected = await cli(["collect", id], ctx);
   assert.equal(collected.code, 1);
   assert.match(collected.err, /could not finish/);
   assert.doesNotMatch(collected.out + collected.err, /no findings/);
-  const rendered = renderScan({ status: "done", url: "https://example.test/report", summary: {} });
-  assert.doesNotMatch(rendered.context, /no findings/);
-  assert.match(rendered.context, /open the report/);
+  fp.state.scan = { summary: {} };
+  const malformed = await cli([], ctx);
+  assert.doesNotMatch(malformed.out, /no findings/);
+  assert.match(malformed.out, /open the report/);
 });

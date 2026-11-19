@@ -39,9 +39,12 @@ do not resubmit. Recovery does not consume another attempt. See `task --help`.
 defaults and overrides. Do not mistake defaults for user choices. Settings
 changes affect all sessions sharing that configuration; attempt counts are per session.
 
-Counters and cached semantics live beside configuration. Local working files
-and results live in `.intent/prove/sessions/<id>/`; do not commit that directory.
-Use `session show <ID>` for actual paths, pin and counts.
+Counters and cached semantics live beside configuration. Each new session's
+workspace is `.intent/logs/<log-id>/`; author inputs directly there and keep the
+folder with source. Retries edit the same inputs. Request/result metadata and
+submitted hashes live in `attempts/<operation-id>/`, without input copies.
+Reports live in the workspace's `artifacts/`. No finalization or cleanup is needed.
+Use `session show <ID>` for actual workspace paths, pin and counts.
 
 ## Attempt limits
 

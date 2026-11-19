@@ -42,6 +42,9 @@ struct Snapshot {
     generated: u64,
     files: BTreeMap<String, String>,
     scan_states: BTreeMap<String, Value>,
+    freshness: BTreeMap<String, String>,
+    assurance: BTreeMap<String, String>,
+    requirement_freshness: BTreeMap<String, String>,
     warnings: Vec<String>,
 }
 
@@ -136,8 +139,43 @@ fn collect_files(root: &Path, dir: &Path, snapshot: &mut Snapshot) -> Result<()>
         if kind.is_symlink() {
             snapshot.warnings.push(format!("Skipped symlink: {rel}"));
         } else if kind.is_dir() {
+            let parts: Vec<_> = rel.split('/').collect();
+            if rel.starts_with("prove/sessions/")
+                && !(parts.len() == 3
+                    || parts.len() == 4 && session::legacy_operation(parts[3]).is_some())
+                || rel.starts_with("logs/") && parts.len() == 3 && name == "inputs"
+            {
+                continue;
+            }
             collect_files(root, &path, snapshot)?;
         } else if kind.is_file() {
+            let current = rel.starts_with("source/")
+                && (rel.contains("/specs/") || rel.ends_with("/index.json"));
+            let requirement = rel.starts_with("source/") && rel.ends_with("/requirements.json");
+            let parts: Vec<_> = rel.split('/').collect();
+            let run = (parts.len() == 3 || parts.len() == 5 && parts[2] == "attempts")
+                && rel.starts_with("logs/")
+                && matches!(name.to_str(), Some("request.json" | "result.json"));
+            let artifact = rel.starts_with("logs/") && rel.split('/').nth(2) == Some("artifacts");
+            let legacy = rel.starts_with("scan/") || rel.starts_with("prove/");
+            if !(current
+                || requirement
+                || run
+                || artifact
+                || legacy
+                || matches!(rel.as_str(), "README.md" | "REQUIREMENTS.md"))
+            {
+                continue;
+            }
+            if rel.starts_with("prove/sessions/") {
+                let parts: Vec<_> = rel.split('/').collect();
+                if parts.len() != 5
+                    || parts[4] != "result.json"
+                    || session::legacy_operation(parts[3]).is_none()
+                {
+                    continue;
+                }
+            }
             // Only evidence/document formats are exported, not temporary or binary files.
             if !matches!(
                 path.extension().and_then(|e| e.to_str()),
@@ -153,6 +191,17 @@ fn collect_files(root: &Path, dir: &Path, snapshot: &mut Snapshot) -> Result<()>
             }
             match fs::read_to_string(&path) {
                 Ok(text) => {
+                    if name == "requirements.json" {
+                        let local = rel
+                            .strip_prefix("source/")
+                            .and_then(|p| p.strip_suffix("/requirements.json"));
+                        if crate::requirements::read_document(&path, local).is_err() {
+                            snapshot
+                                .warnings
+                                .push(format!("Skipped invalid requirements: {rel}"));
+                            continue;
+                        }
+                    }
                     snapshot.files.insert(rel, text);
                 }
                 Err(error) => snapshot
@@ -173,6 +222,9 @@ fn snapshot(root: &Path, name: &str, data_dirs: &[PathBuf]) -> Result<Snapshot> 
             .try_into()?,
         files: BTreeMap::new(),
         scan_states: BTreeMap::new(),
+        freshness: BTreeMap::new(),
+        assurance: BTreeMap::new(),
+        requirement_freshness: BTreeMap::new(),
         warnings: Vec::new(),
     };
     let intent = root.join(".intent");
@@ -180,6 +232,207 @@ fn snapshot(root: &Path, name: &str, data_dirs: &[PathBuf]) -> Result<Snapshot> 
         anyhow::bail!(".intent must not be a symlink");
     }
     collect_files(&intent, &intent, &mut snapshot)?;
+    // Validate all structured scopes, including files that were not eligible for export.
+    let current_requirements = crate::requirements::documents(root);
+    if current_requirements.is_err() {
+        snapshot.warnings.push(format!("Local requirements are invalid; requirement freshness is unknown. Run {} requirements list to inspect the error.", channel::settings().cli));
+    }
+    let current_hashes = current_requirements
+        .as_ref()
+        .ok()
+        .map(|docs| {
+            docs.iter()
+                .flat_map(|(_, _, doc)| &doc.requirements)
+                .map(|r| Ok((r.id.clone(), crate::requirements::record_hash(r)?)))
+                .collect::<Result<BTreeMap<_, _>>>()
+        })
+        .transpose()?;
+    for (path, text) in &snapshot.files {
+        if path.starts_with("logs/") && path.ends_with("/meta.json") {
+            let meta: Value = serde_json::from_str(text)?;
+            snapshot
+                .freshness
+                .insert(path.clone(), source_freshness(root, &meta));
+        }
+        if path.starts_with("logs/") && path.ends_with("/request.json") {
+            let request: Value = serde_json::from_str(text)?;
+            let mut observations = Vec::new();
+            for source in request["targets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .chain(request["sources"].as_array().into_iter().flatten())
+                .chain(request["source"]["files"].as_array().into_iter().flatten())
+            {
+                if source["role"] == "requirements" {
+                    continue;
+                }
+                observations.push(source_freshness(root, source));
+                for spec in source["specs"].as_array().into_iter().flatten() {
+                    let mut spec = spec.clone();
+                    spec["path"] =
+                        json!(format!(".intent/{}", spec["path"].as_str().unwrap_or("")));
+                    spec["role"] = json!("specification");
+                    observations.push(source_freshness(root, &spec));
+                }
+            }
+            let mut inputs_match = true;
+            for input in request["inputs"].as_array().into_iter().flatten() {
+                if crate::storage::input_path(root, input)
+                    .ok()
+                    .and_then(|file| fs::read(file).ok())
+                    .map(crate::storage::hash)
+                    .as_deref()
+                    != input["sha256"].as_str()
+                {
+                    inputs_match = false;
+                }
+            }
+            let fresh = if !inputs_match {
+                "stale"
+            } else if observations.is_empty() {
+                "unknown"
+            } else if observations.iter().all(|s| s == "current") {
+                "current"
+            } else if observations.iter().any(|s| s == "stale") {
+                "stale"
+            } else {
+                "missing_or_unknown"
+            };
+            snapshot.freshness.insert(path.clone(), fresh.into());
+            snapshot.requirement_freshness.insert(
+                path.clone(),
+                requirement_freshness(
+                    root,
+                    &request["requirement_binding"],
+                    current_hashes.as_ref(),
+                ),
+            );
+            let result = snapshot
+                .files
+                .get(&path.replace("request.json", "result.json"))
+                .and_then(|t| serde_json::from_str::<Value>(t).ok());
+            let level = if let Some(result) = result {
+                if request["operation"] == "prove" {
+                    // Aggregate results can include admitted/trusted claims or a cached result.
+                    "server_reported_only; per-claim coverage unestablished; audit not recorded"
+                } else if matches!(request["operation"].as_str(), Some("scan" | "deepscan"))
+                    && (result["status"] == "done" || result["scan"]["status"] == "done")
+                {
+                    "llm_reviewed"
+                } else {
+                    "unchecked"
+                }
+            } else {
+                "unchecked"
+            };
+            snapshot.assurance.insert(path.clone(), level.into());
+        }
+    }
+    match crate::storage::indexes(root) {
+        Err(error) => snapshot
+            .warnings
+            .push(format!("Current property selections are invalid: {error}")),
+        Ok(indexes) => {
+            for (owner, index) in indexes {
+                for (id, selection) in index.properties {
+                    let key = format!("source/{owner}/index.json#{id}");
+                    let mut freshness = "unknown";
+                    if let Some(run) = selection.last_run {
+                        let request_path = snapshot
+                            .files
+                            .keys()
+                            .find(|path| {
+                                path.starts_with("logs/")
+                                    && path.ends_with(&format!("/{run}/request.json"))
+                            })
+                            .cloned()
+                            .unwrap_or_else(|| format!("logs/{run}/request.json"));
+                        let result_path = request_path.replace("request.json", "result.json");
+                        let request = snapshot
+                            .files
+                            .get(&request_path)
+                            .and_then(|text| serde_json::from_str::<Value>(text).ok());
+                        let result = snapshot
+                            .files
+                            .get(&result_path)
+                            .and_then(|text| serde_json::from_str::<Value>(text).ok());
+                        if let (Some(request), Some(_result)) = (request, result) {
+                            let bound = request["properties"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .find(|p| p["id"] == id);
+                            if let Some(bound) = bound {
+                                let sources: Vec<_> = bound["sources"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|s| {
+                                        source_freshness(
+                                            root,
+                                            &json!({"path":s["path"],"source_sha256":s["sha256"]}),
+                                        )
+                                    })
+                                    .collect();
+                                let specs =
+                                    crate::storage::submitted_specs(&request, bound, &run).ok();
+                                let specs_complete = !selection.specs.is_empty()
+                                    && specs.as_ref().is_some_and(|specs| {
+                                        selection.specs.iter().all(|path| {
+                                            specs.iter().any(|spec| spec["path"] == *path)
+                                        })
+                                    });
+                                let specs_changed = specs.as_ref().is_some_and(|specs| {
+                                    selection.specs.iter().any(|path| {
+                                        specs.iter().find(|spec| spec["path"] == *path).is_some_and(
+                                            |spec| {
+                                                crate::storage::spec_path(root, path)
+                                                    .ok()
+                                                    .and_then(|p| fs::read(p).ok())
+                                                    .map(crate::storage::hash)
+                                                    .as_deref()
+                                                    != spec["sha256"].as_str()
+                                            },
+                                        )
+                                    })
+                                });
+                                let requirement_matches = current_hashes
+                                    .as_ref()
+                                    .and_then(|hashes| hashes.get(&id.to_string()))
+                                    .map(String::as_str)
+                                    == bound["record_sha256"].as_str();
+                                freshness = if sources.iter().any(|s| s == "stale")
+                                    || specs_changed
+                                    || !requirement_matches
+                                {
+                                    "stale"
+                                } else if !sources.is_empty()
+                                    && sources.iter().all(|s| s == "current")
+                                    && specs_complete
+                                {
+                                    "current"
+                                } else {
+                                    "missing_or_unknown"
+                                };
+                            }
+                        }
+                    }
+                    if selection
+                        .specs
+                        .iter()
+                        .any(|p| !snapshot.files.contains_key(p))
+                    {
+                        freshness = "missing_or_unknown";
+                        snapshot.warnings.push(format!(
+                            "Missing current specification for property {id} in {owner}"
+                        ));
+                    }
+                    snapshot.freshness.insert(key, freshness.into());
+                }
+            }
+        }
+    }
     for dir in data_dirs {
         for entry in entries(&dir.join("scans"))? {
             let Some(scan) = read_json(&entry.path()) else {
@@ -199,6 +452,82 @@ fn snapshot(root: &Path, name: &str, data_dirs: &[PathBuf]) -> Result<Snapshot> 
         }
     }
     Ok(snapshot)
+}
+
+fn requirement_freshness(
+    root: &Path,
+    binding: &Value,
+    current: Option<&BTreeMap<String, String>>,
+) -> String {
+    let Some(records) = binding["records"].as_array() else {
+        return "unknown".into();
+    };
+    if binding["version"] != 1 {
+        return "unknown".into();
+    }
+    if records.is_empty() && binding["brief"].is_null() {
+        return "not_applicable".into();
+    }
+    let Some(current) = current else {
+        return "unknown".into();
+    };
+    for record in records {
+        let (Some(id), Some(hash)) = (record["id"].as_str(), record["record_sha256"].as_str())
+        else {
+            return "unknown".into();
+        };
+        if current.get(id).map(String::as_str) != Some(hash) {
+            return "stale".into();
+        }
+    }
+    if !binding["brief"].is_null() {
+        let Some(hash) = binding["brief"]["source_sha256"].as_str() else {
+            return "unknown".into();
+        };
+        match crate::requirements::brief(root) {
+            Ok(Some(text)) if crate::storage::hash(&text) == hash => (),
+            Ok(_) => return "stale".into(),
+            Err(_) => return "unknown".into(),
+        }
+    }
+    "current".into()
+}
+
+fn source_freshness(root: &Path, source: &Value) -> String {
+    let Some(path) = source["path"].as_str() else {
+        return "unknown".into();
+    };
+    let file = if source["role"] == "specification" {
+        let Some(relative) = path.strip_prefix(".intent/") else {
+            return "unknown".into();
+        };
+        let Ok(file) = crate::storage::spec_path(root, relative) else {
+            return "unknown".into();
+        };
+        file
+    } else {
+        if crate::requirements::relative_path(path).is_err() {
+            return "unknown".into();
+        }
+        root.join(path)
+    };
+    let Ok(real) = file.canonicalize() else {
+        return "missing".into();
+    };
+    if !real.starts_with(root) {
+        return "unknown".into();
+    }
+    match fs::read(real) {
+        Ok(bytes) => {
+            if source["source_sha256"].as_str() == Some(crate::storage::hash(bytes).as_str()) {
+                "current"
+            } else {
+                "stale"
+            }
+        }
+        Err(_) => "unknown",
+    }
+    .into()
 }
 
 fn html(snapshot: &Snapshot, data_url: Option<&str>) -> Result<String> {

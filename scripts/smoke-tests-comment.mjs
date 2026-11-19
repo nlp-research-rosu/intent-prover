@@ -28,14 +28,14 @@ export function renderReport({ directory, runId, attempt, runUrl, jobs, artifact
     let outcome = job?.conclusion === "cancelled" ? "Cancelled" : "Blocked";
     if (result) {
       if (name === "withdraw") {
-        const tasks = files(path.join(dir, ".intent/prove"))
-          .filter((file) => path.basename(file) === "result.json")
+        const tasks = files(path.join(dir, ".intent/logs"))
+          .filter((file) => /\/[a-z0-9]{6}\/result\.json$/.test(file))
           .map((file) => readJson(file)?.task);
         const proof = tasks.find((task) => task?.kind === "proof" && task.id === result.proof?.taskId);
         if (result.status === "passed" && proof?.status === "completed" && proof.result === "proved") outcome = "Proof succeeded";
         else if (proof?.result === "notProved") outcome = "Not proved";
       } else {
-        const reportPath = result.scan?.taskId ? path.join(dir, ".intent/scan", result.scan.taskId, "report.json") : null;
+        const reportPath = /^[a-z0-9]{6}$/.test(result.scan?.operationId ?? "") ? path.join(dir, ".intent/logs", result.scan.operationId, "artifacts/report.json") : null;
         const report = reportPath ? readJson(reportPath) : null;
         if (result.status === "passed" && report) {
           const count = (report.cards ?? []).length + (report.one_liners ?? []).length;

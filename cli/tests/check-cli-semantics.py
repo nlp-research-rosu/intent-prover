@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Core workflow, saved report and input-safety checks against a loopback server."""
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -38,7 +39,8 @@ class Handler(BaseHTTPRequestHandler):
             task_id = self.path.rsplit("/", 1)[-1]
             self.respond({"id": task_id, "status": self.server.task_status,
                           "semantics": {key: IDENTITY[key] for key in ("id", "commit")},
-                          "toolRuns": [{"tool": "kprove", "exitCode": self.server.exit_code}],
+                          "toolRuns": self.server.tool_runs if self.server.tool_runs is not None else
+                          [{"tool": "kprove", "exitCode": self.server.exit_code}],
                           "definitionId": "test-definition",
                           "result": self.server.outcome,
                           "newBackendField": {"retained": True}})
@@ -56,6 +58,8 @@ class Handler(BaseHTTPRequestHandler):
             self.respond({"code": "INTERNAL_ERROR", "message": "controlled outage"},
                          self.server.submit_failures.pop(0))
             return
+        if self.server.after_submit:
+            self.server.after_submit()
         self.respond({"id": task_id, "status": "queued",
                       "semantics": {key: IDENTITY[key] for key in ("id", "commit")}}, 202)
 
@@ -77,8 +81,10 @@ class Tests(unittest.TestCase):
         self.server.keys = []
         self.server.tasks_by_key = {}
         self.server.submit_failures = []
+        self.server.after_submit = None
         self.server.task_status = "completed"
         self.server.exit_code = 0
+        self.server.tool_runs = None
         self.server.outcome = "proved"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -105,21 +111,48 @@ class Tests(unittest.TestCase):
         self.assertEqual(result.returncode, code, result.stdout + result.stderr)
         return json.loads(result.stdout)
 
-    def operation(self, command, code=0):
+    def operation(self, command, code=0, extra=()):
         args = (["--program", "program.mpy"] if command == "run" else
                 ["--spec", "inputs/spec.k", "--spec-module", "SPEC"])
         return self.cli(command, "--session", self.session["sessionId"],
-                        *args, code=code)
+                        *args, *extra, code=code)
+
+    def requirement(self, targets=None):
+        file = self.base / "requirement.json"
+        file.write_text(json.dumps({"statement": "The selected program preserves the stated invariant.",
+                                    "targets": targets or [{"path": "program.mpy"}]}))
+        return self.cli("requirements", "add", "--input", str(file))["requirement"]["id"]
 
     def test_run_validate_prove_retain_results_and_pinned_semantics(self):
-        self.assertEqual(self.workspace, self.root / ".intent/prove/sessions" / self.session["sessionId"])
+        self.assertEqual(self.workspace.parent, self.root / ".intent/logs")
+        self.assertRegex(self.workspace.name, r"^[a-z0-9]{6}$")
+        self.assertFalse((self.root / ".intent/prove").exists())
+        requirement = self.requirement()
+        self.assertRegex(requirement, r"^[a-z0-9]{6}$")
+        owner = self.root / ".intent/source/program.mpy"
         for command, kind, outcome in (("run", "run", "success"),
                                        ("validate", "validation", "valid"),
                                        ("prove", "proof", "proved")):
             self.server.outcome = outcome
-            result = self.operation(command)
+            result = self.operation(command, extra=() if command == "run" else
+                                    ("--requirement", requirement, "--target", "program.mpy"))
             evidence = Path(result["evidenceDir"])
-            self.assertEqual(evidence, self.workspace / f"{kind}-001")
+            self.assertEqual(evidence.parent, self.workspace / "attempts")
+            self.assertRegex(evidence.name, r"^[a-z0-9]{6}$")
+            self.assertEqual(sorted(path.name for path in evidence.iterdir()),
+                             ["request.json", "result.json"])
+            request = json.loads((evidence / "request.json").read_text())
+            self.assertEqual(request["operation"], command)
+            self.assertEqual(request["session_id"], self.session["sessionId"])
+            self.assertEqual(request["targets"], [] if command == "run" else [
+                {"path": "program.mpy", "symbol": None,
+                 "source_sha256": hashlib.sha256((self.root / "program.mpy").read_bytes()).hexdigest()},
+            ])
+            for entry in request["inputs"]:
+                submitted = (self.root if entry.get("root") == "project" else self.root / ".intent") / entry["path"]
+                self.assertEqual(hashlib.sha256(submitted.read_bytes()).hexdigest(), entry["sha256"])
+                if command != "run":
+                    self.assertEqual(submitted, self.workspace / "inputs/spec.k")
             saved = json.loads((evidence / "result.json").read_text())
             self.assertEqual(saved["task"], result["task"])
             self.assertEqual(saved["task"]["result"], outcome)
@@ -127,18 +160,45 @@ class Tests(unittest.TestCase):
             self.assertTrue(saved["stdout"])
             self.assertTrue(saved["stderr"])
             self.assertEqual(saved["reportUrl"],
-                             f'https://prover-console.intentcomputing.org/tasks/{result["task"]["id"]}')
+                              f'https://prover-console.intentcomputing.org/tasks/{result["task"]["id"]}')
+            if command != "run":
+                selection = json.loads((owner / "index.json").read_text())["properties"][requirement]
+                self.assertEqual(selection["last_run"], evidence.name)
+                self.assertTrue(selection["specs"])
+                self.assertEqual((self.root / ".intent" / selection["specs"][-1]).read_text(),
+                                 "module SPEC endmodule\n")
+            if command == "prove":
+                self.assertEqual(Path(result["proofDir"]), self.workspace / "artifacts")
         self.assertEqual([path for path, _ in self.server.uploads],
                          ["/runs", "/proof-dry-runs", "/proofs"])
         self.assertFalse((self.cwd / ".intent").exists())
         for _, body in self.server.uploads:
             self.assertIn('name="semanticsCommit"\r\n\r\n' + IDENTITY["commit"], body)
             self.assertIn('name="semanticsId"\r\n\r\ntest', body)
+        program = self.workspace / "inputs/program.mpy"
+        program.write_text("pass\n")
+        self.server.outcome = "success"
+        run = self.cli("run", "--session", self.session["sessionId"],
+                       "--program", program.relative_to(self.root).as_posix())
+        request = json.loads((Path(run["evidenceDir"]) / "request.json").read_text())
+        self.assertEqual(self.root / ".intent" / request["inputs"][0]["path"], program)
+        self.assertFalse((Path(run["evidenceDir"]) / "inputs").exists())
 
     def test_report_link_retains_submission_console_when_waiting_and_exporting(self):
         self.env["INTENT_CONSOLE_URL"] = "https://staging-console.example.test/prover/"
-        result = self.operation("prove")
+        result = self.operation("prove", extra=("--target", "program.mpy",
+                                               "--target", "program.mpy::withdraw"))
         evidence = Path(result["evidenceDir"]) / "result.json"
+        request_path = evidence.with_name("request.json")
+        request = json.loads(request_path.read_text())
+        source_hash = hashlib.sha256((self.root / "program.mpy").read_bytes()).hexdigest()
+        self.assertEqual(request["targets"], [
+            {"path": "program.mpy", "symbol": None, "source_sha256": source_hash},
+            {"path": "program.mpy", "symbol": "withdraw", "source_sha256": source_hash},
+        ])
+        self.assertEqual(request["requirements"], [])
+        self.assertNotIn('name="target"', self.server.uploads[-1][1])
+        self.assertNotIn('name="targets"', self.server.uploads[-1][1])
         expected = f'https://staging-console.example.test/prover/tasks/{result["task"]["id"]}'
         self.assertEqual(json.loads(evidence.read_text())["reportUrl"], expected)
         self.env["INTENT_CONSOLE_URL"] = "https://production-console.example.test"
@@ -146,11 +206,31 @@ class Tests(unittest.TestCase):
                              "--session", self.session["sessionId"])
         self.assertEqual(recovered["task"], result["task"])
         self.assertEqual(json.loads(evidence.read_text())["reportUrl"], expected)
+        self.assertEqual(json.loads(request_path.read_text()), request)
 
-        target = self.root / ".intent/prove/example"
-        target.mkdir()
+        target = Path(result["proofDir"])
         (target / "PROOF.md").write_text("# Proof report\nSelected claims and assumptions.\n")
         (target / "SCOPE.md").write_text("# Scope\nOnly the selected claims.\n")
+        legacy_session = dict(self.session)
+        legacy_session["sessionId"] = str(uuid.uuid4())
+        legacy_session.pop("logId")
+        legacy_session.pop("workspaceDir")
+        legacy_state = self.data / "sessions" / legacy_session["sessionId"]
+        legacy_state.mkdir()
+        (legacy_state / "session.json").write_text(json.dumps(legacy_session))
+        legacy = self.root / ".intent/prove/sessions" / legacy_session["sessionId"] / "proof-001"
+        legacy.mkdir(parents=True)
+        legacy_snapshot = json.loads(evidence.read_text())
+        legacy_id = str(uuid.uuid4())
+        legacy_snapshot["task"]["id"] = legacy_id
+        legacy_url = f'https://old-console.example.test/tasks/{legacy_id}'
+        legacy_snapshot["reportUrl"] = legacy_url
+        (legacy / "result.json").write_text(json.dumps(legacy_snapshot))
+        before = len(self.server.uploads)
+        old = self.cli("task", "wait", legacy_id, "--session", legacy_session["sessionId"])
+        self.assertEqual(Path(old["evidenceDir"]), legacy)
+        self.assertEqual(len(self.server.uploads), before)
+        self.assertFalse((legacy / "request.json").exists())
         output = self.base / "report.html"
         requests = len(self.server.requests)
         exported = self.cli("view", "--output", str(output),
@@ -163,22 +243,68 @@ class Tests(unittest.TestCase):
         files = payload["snapshot"]["files"]
         saved = json.loads(files[evidence.relative_to(self.root / ".intent").as_posix()])
         self.assertEqual(saved["reportUrl"], expected)
-        self.assertIn("Selected claims and assumptions.", files["prove/example/PROOF.md"])
-        self.assertIn("Only the selected claims.", files["prove/example/SCOPE.md"])
+        relative = target.relative_to(self.root / ".intent").as_posix()
+        self.assertIn("Selected claims and assumptions.", files[relative + "/PROOF.md"])
+        self.assertIn("Only the selected claims.", files[relative + "/SCOPE.md"])
+        legacy_path = (legacy / "result.json").relative_to(self.root / ".intent").as_posix()
+        self.assertEqual(json.loads(files[legacy_path])["reportUrl"], legacy_url)
+        self.assertFalse(any(path.startswith("prove/sessions/") and path != legacy_path
+                             or "/inputs/" in path for path in files))
+        self.assertEqual(len(self.server.requests), requests)
+        request_relative = request_path.relative_to(self.root / ".intent").as_posix()
+        self.assertEqual(payload["snapshot"]["freshness"][request_relative], "current")
+        (self.root / "program.mpy").write_text("changed\n")
+        stale_output = self.base / "stale.html"
+        self.cli("view", "--output", str(stale_output),
+                 "--plugin-data", str(self.base / "no-plugin-data"))
+        stale_payload = json.loads(stale_output.read_text().split('<script type="application/json" id="data">', 1)[1]
+                                   .split('</script>', 1)[0])
+        self.assertEqual(stale_payload["snapshot"]["freshness"][request_relative], "stale")
         self.assertEqual(len(self.server.requests), requests)
         self.assertIn("Output already exists", self.cli("view", "--output", str(output), code=1)["message"])
 
     def test_failed_proof_preserves_backend_result_and_exit_code(self):
+        requirement = self.requirement()
+        successful = self.operation("prove", extra=("--requirement", requirement))
+        initial_request = json.loads((Path(successful["evidenceDir"]) / "request.json").read_text())
+        bundle = initial_request["specification"]["id"]
+        index = self.root / ".intent/source/program.mpy/index.json"
+        initial = json.loads(index.read_text())["properties"][requirement]
+        current_spec = self.root / ".intent" / initial["specs"][0]
+        frozen = current_spec.read_bytes()
+        (self.workspace / "inputs/spec.k").write_text("module CHANGED endmodule\n")
         self.server.outcome = "notProved"
         self.server.exit_code = 42
-        result = self.operation("prove", code=42)
+        result = self.operation("prove", code=42,
+                                extra=("--requirement", requirement, "--spec-id", bundle))
         self.assertEqual(result["task"]["result"], "notProved")
         self.assertEqual(result["task"]["toolRuns"][-1]["exitCode"], 42)
         self.assertEqual(result["task"]["newBackendField"], {"retained": True})
         evidence = Path(result["evidenceDir"]) / "result.json"
         saved = json.loads(evidence.read_text())
         self.assertEqual(saved["task"], result["task"])
+        selection = json.loads(index.read_text())["properties"][requirement]
+        self.assertEqual(selection["last_run"], evidence.parent.name)
+        self.assertEqual(current_spec.read_bytes(), frozen)
+        submitted = saved["properties"][requirement]["specs"][0]
+        self.assertNotEqual(submitted["sha256"], hashlib.sha256(frozen).hexdigest())
 
+        negative_attempts = 0
+        for command, outcome, runs in (("prove", "notProved", None),
+                                       ("prove", "notProved", []),
+                                       ("validate", "invalid", []),
+                                       ("prove", None, None)):
+            with self.subTest(command=command, outcome=outcome, cached=runs == []):
+                self.server.outcome = outcome
+                self.server.exit_code = 0
+                self.server.tool_runs = runs
+                negative = self.operation(command, extra=("--requirement", requirement,
+                                                           "--spec-id", bundle))
+                negative_attempts += 1
+                selection = json.loads(index.read_text())["properties"][requirement]
+                self.assertEqual(selection["last_run"], Path(negative["evidenceDir"]).name)
+                self.assertEqual(current_spec.read_bytes(), frozen)
+        self.server.tool_runs = None
         self.server.task_status = "failed"
         self.server.exit_code = None
         self.server.outcome = None
@@ -189,6 +315,13 @@ class Tests(unittest.TestCase):
         self.assertEqual(json.loads((Path(failed["evidenceDir"]) / "result.json").read_text())["task"],
                          failed["task"])
         self.assertEqual(saved["task"], json.loads(evidence.read_text())["task"])
+        self.assertEqual(Path(self.cli("session", "show", self.session["sessionId"])["workspaceDir"]),
+                         self.workspace)
+        self.assertEqual(len(list((self.workspace / "attempts").iterdir())), 3 + negative_attempts)
+        self.assertFalse(any(path.name == "inputs" for path in (self.workspace / "attempts").rglob("*")))
+        initial_manifest = json.loads((Path(successful["evidenceDir"]) / "request.json").read_text())
+        self.assertNotEqual(initial_manifest["inputs"][0]["sha256"],
+                            hashlib.sha256((self.workspace / "inputs/spec.k").read_bytes()).hexdigest())
 
     def test_retry_reuses_submission_idempotency_key(self):
         self.server.submit_failures = [503]
@@ -198,6 +331,23 @@ class Tests(unittest.TestCase):
         self.assertTrue(self.server.keys[0])
         self.assertEqual(len(self.server.tasks_by_key), 1)
         self.assertEqual(result["task"]["id"], next(iter(self.server.tasks_by_key.values())))
+
+    def test_changed_source_prevents_late_spec_promotion(self):
+        for changed in (self.root / "program.mpy", self.workspace / "inputs/spec.k"):
+            with self.subTest(changed=changed.name):
+                requirement = self.requirement()
+                self.server.after_submit = lambda: changed.write_text("changed\n")
+                result = self.operation("prove", extra=("--requirement", requirement))
+                evidence = Path(result["evidenceDir"])
+                selection = json.loads((self.root / ".intent/source/program.mpy/index.json").read_text())["properties"][requirement]
+                self.assertIsNone(selection["last_run"])
+                self.assertEqual(selection["specs"], [])
+                self.assertTrue((self.workspace / "inputs/spec.k").exists())
+                self.assertFalse((evidence / "inputs").exists())
+                before = len(self.server.uploads)
+                self.cli("task", "wait", result["task"]["id"], "--session", self.session["sessionId"])
+                self.assertEqual(len(self.server.uploads), before)
+                self.assertFalse((self.root / ".intent/source/program.mpy/specs").exists())
 
     def test_attempt_limits_refuse_submission_without_overwriting_evidence(self):
         self.config.write_text(self.config.read_text() +
@@ -222,6 +372,78 @@ class Tests(unittest.TestCase):
             result = self.cli("prove", "--session", self.session["sessionId"],
                               "--spec", path, "--spec-module", "OUTSIDE", code=1)
             self.assertIn("escapes session inputs", result["message"])
+        escaped = self.base / "outside.mpy"
+        escaped.write_text("pass\n")
+        (self.root / "escaped.mpy").symlink_to(escaped)
+        for target in ("../outside.mpy", "escaped.mpy", "program.mpy::"):
+            self.operation("prove", code=1, extra=("--target", target))
+        self.assertEqual(self.server.uploads, [])
+
+    def test_requirements_accept_inline_json_and_file_input(self):
+        content = {"statement": "The program preserves its caller's state.",
+                   "targets": [{"path": "program.mpy", "symbol": "main"}],
+                   "reason": "Assumption: no external state changes are intended."}
+        inline = self.cli("requirements", "add", "--json", json.dumps(content))["requirement"]
+        input_file = self.base / "requirement.json"
+        input_file.write_text(json.dumps(content))
+        from_file = self.cli("requirements", "add", "--input", str(input_file))["requirement"]
+        for record in (inline, from_file):
+            self.assertRegex(record["id"], r"^[a-z0-9]{6}$")
+            self.assertEqual({key: value for key, value in record.items() if key != "id"}, content)
+        self.assertNotEqual(inline["id"], from_file["id"])
+        content["statement"] = "The program preserves external state and produces no output."
+        updated = self.cli("requirements", "update", inline["id"],
+                           "--json", json.dumps(content))["requirement"]
+        self.assertEqual(updated, dict(content, id=inline["id"]))
+        self.assertEqual(self.cli("requirements", "show", inline["id"])["requirement"], updated)
+        owner = self.root / ".intent/source/program.mpy"
+        records = json.loads((owner / "requirements.json").read_text())["requirements"]
+        self.assertIn(updated, records)
+        self.assertEqual(set(json.loads((owner / "index.json").read_text())["properties"]),
+                         {inline["id"], from_file["id"]})
+        self.assertEqual(self.server.uploads, [])
+
+    def test_requirements_reject_invalid_or_ambiguous_input(self):
+        requirement = self.requirement()
+        file = self.root / ".intent/source/program.mpy/requirements.json"
+        before = file.read_bytes()
+        input_file = self.base / "requirement.json"
+        for command in (("add",), ("update", requirement)):
+            for options in ((), ("--input", str(input_file), "--json", "{}")):
+                result = subprocess.run([BINARY, "requirements", *command, *options],
+                                        cwd=self.cwd, env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("--input", result.stderr)
+                self.assertIn("--json", result.stderr)
+            for content in ("{", '{"statement":"Missing targets"}',
+                            '{"statement":"Bad target","targets":[{"path":"../outside.py"}]}'):
+                self.cli("requirements", *command, "--json", content, code=1)
+                self.assertEqual(file.read_bytes(), before)
+        self.assertEqual(self.server.uploads, [])
+
+    def test_requirements_keep_one_owner_when_their_scope_changes(self):
+        requirement = self.requirement()
+        local = self.root / ".intent/source/program.mpy/requirements.json"
+        owner = self.root / ".intent/source/program.mpy/index.json"
+        self.assertEqual(json.loads(local.read_text())["requirements"][0]["id"], requirement)
+        self.assertEqual(self.cli("requirements", "show", requirement)["requirement"]["id"], requirement)
+        (self.root / "other.py").write_text("pass\n")
+        input_file = self.base / "requirement-update.json"
+        input_file.write_text(json.dumps({"statement": "Both files preserve the invariant.",
+                                         "targets": [{"path": "program.mpy"}, {"path": "other.py"}]}))
+        self.cli("requirements", "update", requirement, "--input", str(input_file))
+        cross = self.root / ".intent/source/requirements.json"
+        self.assertEqual(json.loads(cross.read_text())["requirements"][0]["id"], requirement)
+        self.assertEqual(json.loads(local.read_text())["requirements"], [])
+        self.assertIn(requirement, json.loads(owner.read_text())["properties"])
+        self.assertEqual(len(self.cli("requirements", "list", "--file", "other.py")["requirements"]), 1)
+        before = cross.read_bytes()
+        input_file.write_text(json.dumps({"statement": "Invalid scope.", "targets": [{"path": "../outside.py"}]}))
+        self.cli("requirements", "update", requirement, "--input", str(input_file), code=1)
+        self.assertEqual(cross.read_bytes(), before)
+        self.cli("requirements", "remove", requirement)
+        self.assertEqual(self.cli("requirements", "list")["requirements"], [])
+        self.assertNotIn(requirement, json.loads(owner.read_text())["properties"])
         self.assertEqual(self.server.uploads, [])
 
 

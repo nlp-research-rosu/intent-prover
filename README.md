@@ -11,16 +11,16 @@ There are no automatic hooks or reviews. Ordinary chats and edits do not capture
 
 Before starting a remote Scan or Prove operation, the agent explains what will be uploaded to the configured Intent Prover service. A local review does not require a remote submission.
 
-- **Scan:** a compressed snapshot of tracked and non-ignored untracked text files within the selected file, folder or repository, plus repository metadata. `.intent/NOTES.md` is included when it falls within the selected scope. It excludes other `.intent/` evidence, secrets files, binaries, lockfiles and generated/vendored code. Caps: 512 KB per file, 3,000 files and 15 MB of text. Larger snapshots are trimmed with a coverage notice. Chat prompts, plans, todos and transcripts are not read or uploaded.
+- **Scan:** a compressed snapshot of tracked and non-ignored untracked text files within the selected file, folder or repository, plus repository metadata. It includes `.intent/REQUIREMENTS.md`, applicable structured requirements and their selected current specifications. Other `.intent/` evidence, secrets files, binaries, lockfiles and generated/vendored code are excluded. Caps: 512 KB per file, 3,000 files and 15 MB of text. Larger source snapshots are trimmed with a coverage notice; requirements/specification context that exceeds those limits stops submission. Chat prompts, plans, todos and transcripts are not read or uploaded.
 - **Prove:** the program/specification/helper files selected through the explicit CLI commands. See the proof skills and CLI help for their inputs.
 
 Scan masks obvious secrets locally and never sends files such as `.env*`, private keys or credential files. Redaction is not a substitute for reviewing the requested scope. Scan upload metadata is listed in `.intent/.sent.log`; it does not contain source contents.
 
-Project knowledge and evidence under `.intent/` are meant to be committed with source. Transient `.queue`, `.sent.log`, `.storage.lock` and proof-session state stay ignored; do not blanket-ignore `.intent/`.
+Project knowledge and evidence under `.intent/` are meant to be committed with source. Transient `.sent.log` and `.storage.lock` stay ignored; do not blanket-ignore `.intent/`.
 
 ## Install (Claude Code)
 
-Requirements: Node.js 18+ for Scan commands, and the global `intent-prover` CLI for sign-in and Prove.
+Requirements: Git and the global native `intent-prover` CLI. Scan, sign-in and Prove do not require Node.js.
 
 In Claude Code:
 
@@ -45,9 +45,14 @@ Restart Claude Code or run `/reload-plugins`. Use the Intent Prover skill's onbo
 | `/intent:scan [file or folder] [fast\|balanced\|full]` | Submit a Scan, wait for completion, save evidence and return findings. |
 | `/intent:scan collect [task-id]` | Resume an interrupted Scan without submitting source. No ID: outstanding scans in this project. |
 | `/intent:prove [what to prove]` | Formal proof with K through the global CLI. |
-| `/intent:doctor` | Read connection/configuration diagnostics; does not log in, clear credentials or update the plugin. |
+| `/intent:doctor` | Show the CLI's connection and account diagnostics. |
 
-On Codex, ask the agent to invoke the corresponding skill. On Antigravity, the skill is `/intent:intent-prover`. Scan and diagnostics use `node <plugin>/bin/intent.js`; Prove and login use the global `intent-prover` CLI. Network access and plugin-data writes may need sandbox approval.
+On Codex, ask the agent to invoke the corresponding skill. On Antigravity, the skill is `/intent:intent-prover`. Scan, diagnostics, Prove and login use the global `intent-prover` CLI. Network access and plugin-data writes may need sandbox approval.
+
+Run `intent-prover doctor` from a terminal even when the plugin is not loaded.
+It does not change settings or start sign-in. It exits successfully only when
+account access passes. See [Troubleshooting](skills/intent-prover/references/troubleshooting.md)
+for recovery steps.
 
 ## Signing in
 
@@ -61,7 +66,15 @@ Endpoint settings are shared in `config.toml` beside credentials: `server_url` s
 
 The single `intent-prover` skill contains onboarding, Scan and Prove guides, with detailed references loaded only as needed. `/intent:prove [what to prove]` follows its Prove guide, invoking the global CLI directly. Scan is not a prerequisite. K proofs establish partial correctness: if the program terminates and the precondition holds, the postcondition holds. Writing or auditing new language semantics is not included.
 
-Proof inputs and documents live in `.intent/prove/<target>/`; commit them. `.intent/prove/sessions/` is local session state. Commands detect the repository root even from subdirectories; outside Git, they use the project directory. Explicit CLI operations collect their results, with task recovery documented in `intent-prover task --help`.
+Each new proof session starts directly in `.intent/logs/<log-id>/`. Author inputs in its `inputs/`, reuse them across retries, and keep `PROOF.md`, `SCOPE.md` and reproduction commands in the returned `proofDir` (`artifacts/`). Files stay in that log folder at any stopping point; no finalization or copying into logs is needed. Each attempt retains request/result metadata and submitted hashes in `attempts/<operation-id>/`, not historical input copies. Commands detect the repository root even from subdirectories; outside Git, they use the project directory. Explicit CLI operations collect their results, with task recovery documented in `intent-prover task --help`.
+
+## Project storage
+
+`.intent/REQUIREMENTS.md` holds project-wide human intent. Structured one-file requirements live in `.intent/source/<source-path>/requirements.json`; cross-file requirements live in `.intent/source/requirements.json`. Each requirement has one owning per-source `index.json`, with links to actual current formal files under `specs/<bundle-id>/` and its last applicable operation.
+
+Use the local `requirements` commands to manage those records. Proof and validation commands optionally accept `--requirement <id>` and `--spec-id <id>`; neither is required for ordinary Scan/Prove use. These associations stay local and do not certify a property. Successful associated formal inputs can become current spec copies; failed or stale attempts do not replace them.
+
+Scan uses `.intent/logs/<operation-id>/{request.json,result.json,inputs/,artifacts/}`. Proof sessions keep one `.intent/logs/<log-id>/{inputs/,artifacts/,attempts/}` workspace, with request/result records per attempt. Local requirement, bundle, log and operation IDs use six lowercase letters/digits with project-local collision checks. Server task IDs and proof-session IDs are unchanged. Existing evidence remains in place, without automatic migration. See the skill's [storage reference](skills/intent-prover/references/storage.md) for ownership, scope and submitted-version rules.
 
 ## The `intent-prover` command
 
@@ -130,9 +143,9 @@ Run from inside a Git repository. With no path, Scan snapshots the repository; o
 | `balanced` | 30–35 minutes |
 | `full` | 40–45 minutes |
 
-The command prints a report link, then polls until the task finishes, saves its evidence and returns findings. Keep it running, as with Prove. Polling uses the shared `poll_interval_seconds` setting (default 10 seconds); transient status-request failures retry after 1, 2 and 4 seconds. No detached worker or later-message hook is involved. Collection saves reports under `.intent/scan/<task-id>/report.json`, with task/source metadata in `meta.json`. Report downloads are checked against their stated size and SHA-256. No source contents are copied into the Scan evidence folder.
+The command prints a report link, then polls until the task finishes, saves its evidence and returns findings. Keep it running, as with Prove. Polling uses the shared `poll_interval_seconds` setting (default 10 seconds); transient status-request failures retry after 1, 2 and 4 seconds. No detached worker or later-message hook is involved. Collection saves reports under `.intent/logs/<operation-id>/artifacts/report.json`, with task/source metadata in `meta.json` and operation records beside `artifacts/`. Report downloads are checked against their stated size and SHA-256. No source contents are copied into the Scan evidence folder.
 
-This plugin requires the service's `POST /scan` contract and `scan` task kind. It uses `.intent/scan/` for evidence and `scans/` for task records. Older folders are left untouched and are not read by collection or the viewer.
+This plugin requires the service's `POST /scan` contract and `scan` task kind. It uses `scans/` for local task recovery records. Explicit collection of a task without an operation log creates one using its saved source metadata; it never resubmits code or moves existing evidence.
 
 Interrupting Scan stops local waiting; the remote task may continue. If interrupted, polling fails or a report is still pending, use `collect <task-id>` to resume waiting and collection; it does not resubmit the scan. Saved reports remain available after service files expire. Supporting files remain remote. Findings are flagged, not reproduced; request reproduction or fixes separately.
 
@@ -144,7 +157,7 @@ Interrupting Scan stops local waiting; the remote task may continue. If interrup
 
 After a requested Scan or Prove workflow, the agent exports this viewer and hands
 off one local HTML link with a short outcome, scope and limitations summary.
-Prove first writes or updates `.intent/prove/<target>/PROOF.md` and `SCOPE.md`;
+Prove first writes `PROOF.md` and `SCOPE.md` in the returned `proofDir`;
 the viewer renders those documents rather than generating a proof narrative.
 If export is unavailable, the agent reports that limitation and supplies saved
 evidence instead. No sign-in or network is needed to export or read local HTML.
@@ -158,16 +171,16 @@ still readable; the viewer does not guess its remote environment. Remote job
 pages may require sign-in, and Scan supporting detail files remain remote.
 
 Reports support direct local navigation: append
-`#view=scans&scan=scan%2F<task-id>%2Fmeta.json` for a Scan, or
-`#view=proofs&proof=prove%2F<target>%2F&proofTab=report` for a proof report.
+`#view=scans&scan=logs%2F<operation-id>%2Fartifacts%2Fmeta.json` for a Scan, or
+`#view=proofs&proof=logs%2F<operation-id>%2Fartifacts%2F&proofTab=report` for a proof report.
 URL-encode any additional path characters. HTML presentation does not turn Scan
 findings into formal proof or add assurance to a proof's recorded claims.
 
 ## Development
 
-- Zero runtime dependencies; plain ESM JavaScript, Node 18+.
+- The native Rust CLI runs Scan and Prove. Node 18+ is used only for development checks and release tooling.
 - `npm test` checks core Scan behavior, repository-root evidence, upload safety and corrupt-report retention. The three `cli/tests/check-cli-*.py` scripts check the built CLI for run/validate/prove, failure results, retry identity, each operation's attempt limit, input boundaries, repository-root evidence, offline HTML, login and Ctrl-C. `npm run test:integration` checks that loading each real Claude/Codex plugin does not automatically submit code, using local mock APIs without paid inference. These checks do not replace a real Scan/Prove smoke check before release.
 - Ordinary CI runs the core checks on Linux with Node 22, plus native CLI checks. Relevant plugin changes also run both host checks on Linux. Release/manual host checks use Linux too; native release binaries still build for all six platform/architecture targets.
-- `lib/snapshot.js` builds scoped repository snapshots; `lib/scan.js` submits, waits for and collects Scans. No host session capture or worker spawning remains.
+- `cli/src/scan/` builds scoped repository snapshots and saves reports; `cli/src/scan.rs` submits, waits for and collects Scans. No host session capture or worker spawning remains.
 - Backend contract: the Intent Prover service API (`nlp-research-rosu/prover`); `test/helpers/fake-prover.js` provides a controlled service for checks.
 - CLI: `cli/` (Rust). CI runs formatting, clippy, build and existing tests.

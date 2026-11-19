@@ -1,4 +1,4 @@
-// Pi constructs the proof; Scan invokes the existing Node launcher directly.
+// Pi constructs the proof; Scan invokes the native CLI directly.
 import { spawn, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -55,9 +55,10 @@ function files(directory) {
 }
 
 function evidence(project) {
-  return files(path.join(project, ".intent/prove/sessions"))
-    .filter((file) => /\/(?:proof|run|validation)-\d+\/result\.json$/.test(file))
-    .map((file) => ({ file, snapshot: JSON.parse(fs.readFileSync(file, "utf8")) }));
+  return files(path.join(project, ".intent/logs"))
+    .filter((file) => /\/[a-z0-9]{6}\/result\.json$/.test(file))
+    .map((file) => ({ file, snapshot: JSON.parse(fs.readFileSync(file, "utf8")), request: JSON.parse(fs.readFileSync(path.join(path.dirname(file), "request.json"), "utf8")) }))
+    .filter(({ request }) => ["run", "validate", "prove"].includes(request.operation));
 }
 
 function scanRecords(env) {
@@ -87,8 +88,9 @@ function checkScan(task, saved, project, apiUrl) {
     const current = fs.readFileSync(path.join(repo, file.path));
     requireValue(isPinnedSource(original, current, file.source_sha256), "Scanned source differs from pinned/unchanged code");
   }
-  const dir = path.join(repo, ".intent/scan", task.id);
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8"));
+  requireValue(/^[a-z0-9]{6}$/.test(saved.operation_id), "Scan has no valid local operation ID");
+  const dir = path.join(repo, ".intent/logs", saved.operation_id, "artifacts");
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, "..", "result.json"), "utf8"));
   const bytes = fs.readFileSync(path.join(dir, "report.json"));
   const ref = task.result.report;
   requireValue(meta.task_id === task.id && meta.report?.status === "saved", "Saved Scan metadata differs from service evidence");
@@ -106,7 +108,7 @@ function checkScan(task, saved, project, apiUrl) {
       requireValue(location.line <= fs.readFileSync(path.join(repo, location.path), "utf8").split("\n").length, "Scan finding line is outside source file");
     }
   }
-  return { taskId: task.id, repository: SCAN.remote, commit: SCAN.commit, scope: SCAN.scope, counts: task.result.counts, sourceUnchanged: true, reportSha256: ref.sha256 };
+  return { taskId: task.id, operationId: saved.operation_id, repository: SCAN.remote, commit: SCAN.commit, scope: SCAN.scope, counts: task.result.counts, sourceUnchanged: true, reportSha256: ref.sha256 };
 }
 
 async function main() {
@@ -269,23 +271,22 @@ async function main() {
       requireValue(sessions.length === 1, "Expected exactly one proof construction session");
       const session = JSON.parse(fs.readFileSync(sessions[0], "utf8"));
       requireValue(session.semantics.id === result.fixture.semantics.id && session.semantics.commit === result.fixture.semantics.commit, "Proof session differs from the supplied bytecode semantics pin");
-      const proofs = evidence(project).filter(({ file }) => /\/proof-\d+\/result\.json$/.test(file)).sort((a, b) => a.file.localeCompare(b.file, "en", { numeric: true }));
+      const proofs = evidence(project).filter(({ request, snapshot }) => request.operation === "prove" && snapshot.task)
+        .sort((a, b) => a.request.attempt - b.request.attempt);
       requireValue(proofs.length > 0, "Pi did not save a real proof submission");
       const saved = proofs.at(-1).snapshot.task;
       const { task } = command(["task", "show", saved.id]);
       result.proof = checkProof(task, saved, session.semantics);
-      requireValue(files(path.join(project, ".intent/prove")).some((file) => path.basename(file) === "PROOF.md"), "Pi did not save PROOF.md");
-      requireValue(files(path.join(project, ".intent/prove")).some((file) => path.basename(file) === "SCOPE.md"), "Pi did not save SCOPE.md");
+      requireValue(files(path.join(project, ".intent/logs")).some((file) => path.basename(file) === "PROOF.md"), "Pi did not save PROOF.md");
+      requireValue(files(path.join(project, ".intent/logs")).some((file) => path.basename(file) === "SCOPE.md"), "Pi did not save SCOPE.md");
     } else {
       const repo = path.join(project, "mle-bench");
-      const launcher = path.join(packageRoot, "bin/intent.js");
-      requireValue(fs.existsSync(launcher), "Generated staging Scan launcher is missing");
       result.scanCommands = [
         { executable: "git", args: ["init", "--quiet", repo], cwd: project },
         { executable: "git", args: ["remote", "add", "origin", SCAN.remote], cwd: repo },
         { executable: "git", args: ["fetch", "--depth=1", "origin", SCAN.commit], cwd: repo },
         { executable: "git", args: ["checkout", "--quiet", "--detach", SCAN.commit], cwd: repo },
-        { executable: process.execPath, args: [launcher, "scan", SCAN.scope, "fast"], cwd: repo },
+        { executable: CLI, args: ["scan", SCAN.scope, "fast"], cwd: repo },
       ];
       write("scan-plan.json", { ...SCAN, depth: "fast", commands: result.scanCommands });
       write("upload-scope.txt", `Upload the public ${SCAN.remote} repository at ${SCAN.commit}, folder ${SCAN.scope}/, using the existing staging Scan launcher's snapshot filtering and redaction. No repository dependencies or scripts are installed/run.\n`);
