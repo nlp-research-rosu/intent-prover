@@ -6,6 +6,10 @@ Maintainers: add a line under Unreleased in the same pull request as the change.
 
 ## [Unreleased]
 
+### Fixed
+
+- Build the Linux x64 and ARM64 CLI releases against Debian 12 (glibc 2.36).
+
 ### Changed
 
 - Scan and diagnostics now run through the native CLI without Node.js, preserving explicit submission, interrupted-task recovery and local reports.
