@@ -1,6 +1,6 @@
 {
   "name": "intent-prover",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "Intent Prover: code analysis and verification for AI coding assistants.",
   "type": "module",
