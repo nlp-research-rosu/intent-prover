@@ -48,13 +48,13 @@ until suitable files exist.
 For an existing `wallet.py` with a `withdraw` function:
 
 ```sh
-intent-prover requirements add --json '{
+intent-prover-staging requirements add --json '{
   "statement": "A zero withdrawal returns the original balance.",
   "targets": [{"path": "wallet.py", "symbol": "withdraw"}],
   "reason": "Documented withdrawal behavior."
 }'
-intent-prover requirements list --file wallet.py
-intent-prover requirements update <id> --json '{"statement":"A zero withdrawal returns the original balance without a fee.","targets":[{"path":"wallet.py","symbol":"withdraw"}]}'
+intent-prover-staging requirements list --file wallet.py
+intent-prover-staging requirements update <id> --json '{"statement":"A zero withdrawal returns the original balance without a fee.","targets":[{"path":"wallet.py","symbol":"withdraw"}]}'
 ```
 
 Use the returned ID for updates to the same requirement; do not add duplicates

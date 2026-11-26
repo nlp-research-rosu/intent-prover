@@ -3,7 +3,7 @@
 Start with the [CLI update check](onboarding.md#check-cli-updates) once for this
 requested workflow. Reuse saved sign-in.
 
-Use the global native CLI as described in [Intent Prover](../SKILL.md#commands).
+Use the global native CLI as described in [Intent Prover Staging](../SKILL.md#commands).
 
 ## Before submitting
 
@@ -53,7 +53,7 @@ existing evidence. Commit project knowledge with source; do not blanket-ignore
 `.intent/`.
 
 Check findings against the submitted version, then [deliver one local HTML
-report](../SKILL.md#deliver-results) using `intent-prover view --output <new-report.html>`.
+report](../SKILL.md#deliver-results) using `intent-prover-staging view --output <new-report.html>`.
 The saved remote job URL is a secondary link inside the viewer. State coverage
 and exclusions; Scan findings are not reproduced bugs or formal proofs.
 Offer to reproduce or fix; findings do not authorize edits. After a
