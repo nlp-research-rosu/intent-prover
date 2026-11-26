@@ -414,7 +414,16 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
         .map(|file| file["path"].as_str().unwrap().to_owned())
         .collect();
     let context = crate::requirements::context(&root, &paths)?;
-    let mut binding = json!({"version":1,"kind":"consumed_context","brief":context["brief"].as_str().filter(|s|!s.is_empty()).map(|s|json!({"source_sha256":hash(s)})),"records":context["requirements"].as_array().into_iter().flatten().map(|r|json!({"id":r["id"],"record_sha256":hash(r.to_string())})).collect::<Vec<_>>(),"excluded":[]});
+    // Local evidence setup creates a brief with only the template headings.
+    let brief = context["brief"].as_str().filter(|brief| {
+        brief.lines().map(str::trim).any(|line| {
+            !line.is_empty()
+                && !crate::requirements::BRIEF
+                    .lines()
+                    .any(|heading| heading == line)
+        })
+    });
+    let mut binding = json!({"version":1,"kind":"consumed_context","brief":brief.map(|text|json!({"source_sha256":hash(text)})),"records":context["requirements"].as_array().into_iter().flatten().map(|r|json!({"id":r["id"],"record_sha256":hash(r.to_string())})).collect::<Vec<_>>(),"excluded":[]});
     let mut docs = BTreeMap::<String, Vec<Value>>::new();
     for record in context["requirements"].as_array().into_iter().flatten() {
         let source = record["targets"][0]["path"].as_str().unwrap();
@@ -439,7 +448,7 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
             )
         })
         .collect();
-    if let Some(brief) = context["brief"].as_str().filter(|s| !s.is_empty()) {
+    if let Some(brief) = brief {
         contexts.insert(0, (".intent/REQUIREMENTS.md".into(), brief.into()));
     }
     let has_requirements = !contexts.is_empty();
