@@ -246,6 +246,13 @@ pub(crate) fn run(args: ScanArgs) -> Result<String> {
         .and_then(|s| s.to_str())
         .context("Missing Scan operation ID")?;
     let idem = uuid::Uuid::new_v4().simple().to_string();
+    if !snap.has_requirements {
+        eprintln!(
+            "Warning: No `.intent` requirements found for this scan. Prover will infer them from \
+             the uploaded code and docs. For a more accurate scan, use Formalize to write \
+             requirements locally before running Scan."
+        );
+    }
     let mut response = api.submit(&snap.gz, &idem);
     if response.status == 429
         && response.code() == "RATE_LIMITED"
