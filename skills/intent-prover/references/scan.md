@@ -7,22 +7,17 @@ Use the global native CLI as described in [Intent Prover](../SKILL.md#commands).
 
 ## Before submitting
 
-For a new Scan, run `intent-prover scan --preflight` with the requested path
-and depth. This is a local check and does not require sign-in. Do not run it
-for `scan collect`.
+If you know the selected scope has no requirements, you can offer
+[Formalize](formalize.md) to write them locally before running Scan. If the
+upload has no requirements, the CLI warns and continues, and Prover infers
+requirements from the upload. Do not adopt inferred requirements automatically.
 
-If preflight says no requirements will be uploaded, explain that inferred
-requirements can miss expected behavior or mistake intentional behavior for
-a bug. Offer to use [Formalize](formalize.md) first or to scan without supplied
-requirements. Wait for the user's choice unless they already asked to proceed
-without requirements. Do not adopt inferred requirements automatically.
-If the check cannot determine what would be uploaded, report the problem and
-do not submit. A direct CLI scan without `--preflight` does not pause.
-
-Before submitting, explain that the requested code will be uploaded to the
+Before submitting, explain that the selected code will be uploaded to the
 configured service with obvious secrets masked. Mention that the upload can
-include applicable requirements and their selected specifications. A generic
-local-review request is not permission to upload code.
+include the project brief, applicable requirements and their selected
+specifications. Other `.intent/` evidence and chat transcripts are excluded.
+A generic local-review request is not permission to upload code; ask if remote
+analysis was not requested.
 
 ## Submit
 

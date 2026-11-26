@@ -442,6 +442,7 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
     if let Some(brief) = context["brief"].as_str().filter(|s| !s.is_empty()) {
         contexts.insert(0, (".intent/REQUIREMENTS.md".into(), brief.into()));
     }
+    let has_requirements = !contexts.is_empty();
     let ids: BTreeSet<_> = context["requirements"]
         .as_array()
         .into_iter()
@@ -525,7 +526,6 @@ pub(super) fn build(cwd: &Path, scope: Option<&str>, host: Host, depth: Depth) -
         );
     }
     let mut source = meta;
-    let has_requirements = sources.iter().any(|file| file["role"] == "requirements");
     source["files"] = json!(sources);
     source["requirement_binding"] = binding;
     source["snapshot_sha256"] = json!(hash(&gz));

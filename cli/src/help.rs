@@ -40,10 +40,9 @@ always goes under .intent/logs/<operation-id>/artifacts/ at the repository root.
 An optional depth word selects fast (default), balanced or full. Place the
 target and depth in either order. Give only one target and one depth.
 
-Use --preflight with the same target and depth to check locally whether the
-upload would include requirements. It does not sign in, submit or save a job.
-Without --preflight, Scan prints a notice if no requirements will be uploaded
-and continues without prompting.
+If the selected upload has no .intent requirements, Scan warns and continues
+without prompting. Prover infers requirements from the uploaded code and docs.
+For a more accurate scan, write requirements locally with Formalize first.
 
 The collect action accepts an optional task ID. It resumes an existing local
 record for this project and service without another upload. Without an ID it

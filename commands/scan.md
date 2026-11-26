@@ -9,7 +9,7 @@ The user requested: $ARGUMENTS
 First follow the Intent Prover skill's `references/onboarding.md#check-cli-updates`.
 Reuse saved sign-in; check once for this requested workflow, not on each poll.
 
-For a new Scan, follow the Intent Prover skill's `references/scan.md#before-submitting`. Check the requested scope with `intent-prover scan --preflight` before the upload. Tell the user what will be uploaded and do not widen the requested scope.
+For a new Scan, follow the Intent Prover skill's `references/scan.md#before-submitting`. Tell the user what will be uploaded and do not widen the requested scope.
 
 Run `intent-prover scan --data "${CLAUDE_PLUGIN_DATA}" --plugin-root "${CLAUDE_PLUGIN_ROOT}"` from the project, adding the arguments:
 
